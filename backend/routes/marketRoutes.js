@@ -1,7 +1,9 @@
 import express from 'express';
+import { pool } from '../config/db.js';
 import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
+let watchlistColumnReady;
 
 // Mock market data - In production, integrate with real market APIs
 const marketData = {
@@ -44,6 +46,130 @@ const marketData = {
     { symbol: 'TCS', name: 'Tata Consultancy Services', price: 3892.40, change: -12.30, changePercent: -0.31 }
   ]
 };
+
+const DEFAULT_WATCHLIST_SYMBOLS = ['TATAMOTORS', 'WIPRO', 'MARUTI', 'SBIN'];
+
+async function ensureWatchlistColumn() {
+  if (!watchlistColumnReady) {
+    watchlistColumnReady = pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS watchlist JSONB')
+      .catch((error) => {
+        watchlistColumnReady = null;
+        throw error;
+      });
+  }
+  await watchlistColumnReady;
+}
+
+async function updateWatchlist(userId, update) {
+  await ensureWatchlistColumn();
+  const client = await pool.connect();
+  let transactionStarted = false;
+
+  try {
+    await client.query('BEGIN');
+    transactionStarted = true;
+    const result = await client.query(
+      'SELECT watchlist FROM users WHERE id = $1 FOR UPDATE',
+      [userId],
+    );
+    if (!result.rows[0]) {
+      const error = new Error('Account not found.');
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const storedSymbols = result.rows[0].watchlist;
+    if (storedSymbols !== null && !Array.isArray(storedSymbols)) {
+      throw new Error('Saved watchlist data is invalid.');
+    }
+
+    const symbols = storedSymbols === null
+      ? [...DEFAULT_WATCHLIST_SYMBOLS]
+      : storedSymbols
+        .map((entry) => String(typeof entry === 'string' ? entry : entry?.symbol || '').trim().toUpperCase())
+        .filter(Boolean);
+    const nextSymbols = update ? update(symbols) : symbols;
+    await client.query(
+      'UPDATE users SET watchlist = $1::jsonb WHERE id = $2',
+      [JSON.stringify(nextSymbols), userId],
+    );
+    await client.query('COMMIT');
+    return nextSymbols;
+  } catch (error) {
+    if (transactionStarted) await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function getWatchlistStocks(symbols) {
+  return symbols
+    .map((symbol) => {
+      const stock = marketData.stocks.find((item) => item.symbol === symbol);
+      if (!stock) return null;
+      return symbol === 'WIPRO' ? { ...stock, name: 'Wipro Ltd' } : stock;
+    })
+    .filter(Boolean);
+}
+
+function sendWatchlistError(res, error, message) {
+  if (!(error.statusCode >= 400 && error.statusCode < 500)) {
+    console.error(`${message}:`, error.message);
+  }
+  return res.status(error.statusCode || 500).json({
+    success: false,
+    message: error.statusCode >= 400 && error.statusCode < 500 ? error.message : message,
+  });
+}
+
+router.get('/watchlist', protect, async (req, res) => {
+  try {
+    const symbols = await updateWatchlist(req.user._id);
+    return res.json({ success: true, data: getWatchlistStocks(symbols) });
+  } catch (error) {
+    return sendWatchlistError(res, error, 'Unable to load your watchlist.');
+  }
+});
+
+router.post('/watchlist', protect, async (req, res) => {
+  const symbol = String(req.body?.symbol || '').trim().toUpperCase();
+  const stock = marketData.stocks.find((item) => item.symbol === symbol);
+  if (!stock) {
+    return res.status(400).json({ success: false, message: 'Choose a stock from the available stock list.' });
+  }
+
+  try {
+    const symbols = await updateWatchlist(req.user._id, (currentSymbols) => {
+      if (currentSymbols.includes(symbol)) {
+        const error = new Error('This stock is already in your watchlist.');
+        error.statusCode = 409;
+        throw error;
+      }
+      return [...currentSymbols, symbol];
+    });
+    return res.status(201).json({ success: true, data: getWatchlistStocks(symbols) });
+  } catch (error) {
+    return sendWatchlistError(res, error, 'Unable to add this stock to your watchlist.');
+  }
+});
+
+router.delete('/watchlist/:symbol', protect, async (req, res) => {
+  const symbol = String(req.params.symbol || '').trim().toUpperCase();
+  try {
+    const symbols = await updateWatchlist(req.user._id, (currentSymbols) => {
+      if (!currentSymbols.includes(symbol)) {
+        const error = new Error('This stock is not in your watchlist.');
+        error.statusCode = 404;
+        throw error;
+      }
+      return currentSymbols.filter((currentSymbol) => currentSymbol !== symbol);
+    });
+    return res.json({ success: true, data: getWatchlistStocks(symbols) });
+  } catch (error) {
+    return sendWatchlistError(res, error, 'Unable to remove this stock from your watchlist.');
+  }
+});
 
 // @desc    Get market overview
 // @route   GET /api/market/overview

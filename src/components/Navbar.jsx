@@ -33,16 +33,18 @@ const Navbar = () => {
       name: 'Products', 
       href: '#',
       dropdown: [
-        { name: 'Mutual Funds', icon: Wallet, description: 'Automated SIPs & lump-sum investing' },
-        { name: 'Unlisted Shares (Pre-IPO)', icon: BarChart3, description: 'Curated high-growth opportunities' },
-        { name: 'Insurance', icon: Award, description: 'Life & health insurance products' },
-        { name: 'Strategy Builder', icon: BarChart3, description: 'F&O payoff charts & analytics' },
+        { name: 'Mutual Funds', link: '/dashboard/explore', icon: Wallet, description: 'Automated SIPs & lump-sum investing' },
+        { name: 'Unlisted Shares (Pre-IPO)', link: '/dashboard/unlisted', icon: BarChart3, description: 'Curated high-growth opportunities' },
+        { name: 'Insurance', link: '/dashboard/insurance', icon: Award, description: 'Life & health insurance products' },
+        { name: 'Strategy Builder', link: '/dashboard/strategy', icon: BarChart3, description: 'F&O payoff charts & analytics' },
       ]
     },
     { name: 'Calculators', href: '/calculator' },
     { name: 'Become A Partner', href: '/partner' },
     { name: 'Open Free Demat', href: '/openfreedemat' },
-    { name: 'Contact-Us', href: '/contact' },  ];
+    { name: 'Contact-Us', href: '/contact' },
+    ...(isAuthenticated ? [{ name: 'Dashboard', href: '/dashboard/explore' }] : []),
+  ];
 
   return (
     <motion.nav
@@ -105,7 +107,7 @@ const Navbar = () => {
           {link.dropdown.map((item, idx) => (
             <Link
               key={item.name}
-              to={item.link || '#'}
+              to={item.link}
               className={`flex flex-col items-center text-center px-5 py-3 rounded-xl hover:bg-dark-800 transition-all group min-w-[120px] ${idx < link.dropdown.length - 1 ? 'border-r border-dark-700/60' : ''}`}
             >
               <div className="w-10 h-10 bg-dark-800 group-hover:bg-amber-500/10 rounded-lg flex items-center justify-center transition-colors mb-2">
@@ -132,9 +134,6 @@ const Navbar = () => {
           <div className="hidden lg:flex items-center space-x-4">
             {isAuthenticated ? (
               <>
-                <Link to="/dashboard" className="btn-ghost">
-                  Dashboard
-                </Link>
                 <div className="flex items-center space-x-3">
                   <div className="w-10 h-10 bg-gradient-to-br from-primary-500 to-accent-cyan rounded-full flex items-center justify-center text-dark-950 font-semibold">
                     {user?.firstName?.[0]}{user?.lastName?.[0]}
@@ -186,7 +185,7 @@ const Navbar = () => {
                       {link.dropdown.map((item) => (
                         <Link
                           key={item.name}
-                          to="#"
+                          to={item.link}
                           className="flex items-center space-x-3 p-3 rounded-xl hover:bg-dark-800 transition-colors"
                         >
                           <item.icon className="w-5 h-5 text-amber-400" />
@@ -208,9 +207,6 @@ const Navbar = () => {
               <div className="pt-4 border-t border-dark-800 space-y-3">
                 {isAuthenticated ? (
                   <>
-                    <Link to="/dashboard" className="btn-primary w-full text-center block">
-                      Dashboard
-                    </Link>
                     <button onClick={logout} className="btn-secondary w-full">
                       Logout
                     </button>

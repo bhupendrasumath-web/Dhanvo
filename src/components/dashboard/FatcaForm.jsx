@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ArrowUpFromLine, CheckCircle2 } from 'lucide-react';
+import { ArrowUpFromLine } from 'lucide-react';
 import countries from 'i18n-iso-countries';
 import en from 'i18n-iso-countries/langs/en.json';
 import api from '../../services/api';
@@ -177,7 +177,7 @@ const FatcaForm = ({ onSubmitted, user, prefill = {}, initialValues: signupValue
   };
 
   return (
-    <section className={registrationMode ? 'card' : 'mb-6 border-y border-primary-500/20 py-6'}>
+    <section className={registrationMode ? 'card' : 'dash-fatca-panel'}>
       {registrationMode ? (
         <div className="card-head">
           <div className="section-title">
@@ -189,21 +189,22 @@ const FatcaForm = ({ onSubmitted, user, prefill = {}, initialValues: signupValue
           </div>
         </div>
       ) : (
-        <div className="mb-5 flex items-start gap-3">
-          <div className="rounded-lg bg-primary-500/10 p-2 text-primary-300"><ArrowUpFromLine size={19} /></div>
+        <div className="dash-fatca-heading">
+          <div className="dash-fatca-icon"><ArrowUpFromLine size={18} /></div>
           <div>
-            <h2 className="text-lg font-semibold text-white">FATCA details</h2>
-            <p className="mt-1 text-sm text-dark-400">Your date of birth is filled from signup when available. Required answers are marked *.</p>
+            <p className="dash-panel-kicker">ACCOUNT VERIFICATION</p>
+            <h2>FATCA / CRS details</h2>
+            <p>Your date of birth is filled from signup when available. Required answers are marked *.</p>
           </div>
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className={registrationMode ? 'card-body signup-fatca-form' : 'max-w-4xl'}>
-        <div className={registrationMode ? 'grid' : 'grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3'}>
+      <form onSubmit={handleSubmit} className={registrationMode ? 'card-body signup-fatca-form' : 'dash-fatca-form'}>
+        <div className={registrationMode ? 'grid' : 'dash-fatca-fields'}>
           {fields.map(({ name, label, type = 'text', placeholder, help, required = true, options }) => (
-            <label key={name} className={registrationMode ? 'field' : 'block text-sm text-dark-300'}>
+            <label key={name} className={registrationMode ? 'field' : 'dash-fatca-field'}>
               <span
-                className={registrationMode ? '' : 'mb-1.5 block'}
+                className={registrationMode ? '' : 'dash-fatca-label'}
                 style={registrationMode ? { display: 'block', marginBottom: 6, color: '#354354', fontSize: 10, fontWeight: 800 } : undefined}
               >
                 {label}{required && <> <span className="text-red-400" aria-hidden="true">*</span></>}
@@ -214,7 +215,7 @@ const FatcaForm = ({ onSubmitted, user, prefill = {}, initialValues: signupValue
                   value={values[name]}
                   disabled={name === 'occupationType'}
                   onChange={(event) => updateField(name, event.target.value)}
-                  className={registrationMode ? '' : 'w-full rounded-md border border-dark-700 bg-dark-900 px-3 py-2.5 text-white outline-none focus:border-primary-400 disabled:cursor-not-allowed disabled:opacity-70'}
+                  className={registrationMode ? '' : 'dash-fatca-control'}
                 >
                   <option value="" disabled>Select an option</option>
                   {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
@@ -226,12 +227,12 @@ const FatcaForm = ({ onSubmitted, user, prefill = {}, initialValues: signupValue
                   placeholder={placeholder}
                   value={values[name]}
                   onChange={(event) => updateField(name, event.target.value)}
-                  className={registrationMode ? '' : 'w-full rounded-md border border-dark-700 bg-dark-900 px-3 py-2.5 text-white outline-none focus:border-primary-400'}
+                  className={registrationMode ? '' : 'dash-fatca-control'}
                 />
               )}
               {(name === 'occupationCode' && occupationDescription) || help ? (
                 <span
-                  className={registrationMode ? '' : 'mt-1 block text-xs text-dark-500'}
+                  className={registrationMode ? '' : 'dash-fatca-help'}
                   style={registrationMode ? { display: 'block', marginTop: 5, color: '#657388', fontSize: 9, lineHeight: 1.45 } : undefined}
                 >
                   {name === 'occupationCode' && occupationDescription
@@ -243,12 +244,12 @@ const FatcaForm = ({ onSubmitted, user, prefill = {}, initialValues: signupValue
           ))}
         </div>
 
-        {!registrationMode && error && <p role="alert" className="mt-4 text-sm text-red-400">{error}</p>}
+        {!registrationMode && error && <p role="alert" className="dash-fatca-error">{error}</p>}
         {!registrationMode && (
           <button
             type="submit"
             disabled={submitting}
-            className="mt-5 inline-flex items-center gap-2 rounded-md bg-primary-500 px-4 py-2.5 text-sm font-semibold text-dark-950 transition hover:bg-primary-400 disabled:cursor-not-allowed disabled:opacity-60"
+            className="dash-fatca-submit"
           >
             <ArrowUpFromLine size={16} />
             {submitting ? 'Submitting to NSE...' : 'Submit FATCA to NSE'}
@@ -258,15 +259,5 @@ const FatcaForm = ({ onSubmitted, user, prefill = {}, initialValues: signupValue
     </section>
   );
 };
-
-export const FatcaSubmitted = ({ remark }) => (
-  <div className="mb-6 flex items-start gap-3 border-y border-emerald-500/25 py-5 text-sm">
-    <CheckCircle2 size={19} className="mt-0.5 shrink-0 text-emerald-400" />
-    <div>
-      <p className="font-medium text-emerald-300">FATCA submitted to NSE</p>
-      <p className="mt-1 text-dark-400">{remark || 'Awaiting NSE and RTA validation. The account remains inactive until the report confirms activation.'}</p>
-    </div>
-  </div>
-);
 
 export default FatcaForm;

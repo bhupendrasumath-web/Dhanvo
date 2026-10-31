@@ -1,6 +1,6 @@
 import express from 'express';
 import { body } from 'express-validator';
-import { register, login, getMe, updateProfile } from '../controllers/authController.js';
+import { register, login, getMe, refreshSession, updateProfile } from '../controllers/authController.js';
 import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -30,18 +30,18 @@ const registerValidation = [
 ];
 
 const loginValidation = [
-  body('email')
-    .trim()
-    .notEmpty().withMessage('Email is required')
-    .isEmail().withMessage('Please enter a valid email'),
-  body('password')
-    .notEmpty().withMessage('Password is required')
+  body('identifier').optional().trim(),
+  body('email').optional().trim().isEmail().withMessage('Please enter a valid email'),
+  body('phone').optional().trim().matches(/^[0-9]{10}$/).withMessage('Please enter a valid 10-digit phone number'),
+  body('password').optional().isString(),
+  body('pin').optional().matches(/^[0-9]{6}$/).withMessage('PIN must contain 6 digits'),
 ];
 
 // Routes
 router.post('/register', registerValidation, register);
 router.post('/login', loginValidation, login);
 router.get('/me', protect, getMe);
+router.post('/refresh-session', protect, refreshSession);
 router.put('/profile', protect, updateProfile);
 
 export default router;

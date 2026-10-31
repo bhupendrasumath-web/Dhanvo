@@ -13,10 +13,7 @@ import {
   LockKeyhole,
   Mail,
   ShieldCheck,
-  Smartphone,
   Loader2,
-  LogIn,
-  UserRound,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import api, { buildOtpPayload } from "../services/api";
@@ -25,9 +22,6 @@ const GOLD = "#C8974A";
 const LIGHT_GOLD = "#E0B968";
 const NAVY = "#071321";
 const CREAM = "#FBF9F4";
-
-const simulateDelay = (ms = 400) =>
-  new Promise((resolve) => setTimeout(resolve, ms));
 
 function Field({
   label,
@@ -72,19 +66,15 @@ function LoginCard({ children }) {
 }
 
 function SignIn() {
-  const { loginWithOtp } = useAuth();
-  const [loginMethod, setLoginMethod] =
-    useState("mobile");
+  const { loginWithOtp, loginWithCredential } = useAuth();
+  const [loginMethod, setLoginMethod] = useState("otp");
 
-  const [mobile, setMobile] = useState("");
-  const [email, setEmail] = useState("");
-  const [emailOtp, setEmailOtp] = useState("");
-  const [emailOtpSent, setEmailOtpSent] = useState(false);
-  const [emailOtpTimer, setEmailOtpTimer] = useState(30);
-
+  const [otpIdentifier, setOtpIdentifier] = useState("");
   const [otp, setOtp] = useState("");
   const [otpSent, setOtpSent] = useState(false);
   const [otpTimer, setOtpTimer] = useState(30);
+  const [credentialIdentifier, setCredentialIdentifier] = useState("");
+  const [credentialValue, setCredentialValue] = useState("");
 
   const [rememberMe, setRememberMe] =
     useState(false);
@@ -92,6 +82,7 @@ function SignIn() {
   const [loading, setLoading] = useState(false);
   const [loginSuccess, setLoginSuccess] =
     useState(false);
+  const [userNotFound, setUserNotFound] = useState(false);
 
   const [forgotMode, setForgotMode] =
     useState(false);
@@ -104,6 +95,10 @@ function SignIn() {
 
   const [forgotIdentifier, setForgotIdentifier] =
     useState("");
+  const [forgotOtp, setForgotOtp] = useState("");
+  const [forgotCredentialType, setForgotCredentialType] = useState("password");
+  const [forgotCredential, setForgotCredential] = useState("");
+  const [forgotCredentialConfirmation, setForgotCredentialConfirmation] = useState("");
 
   const pageRef = useRef(null);
 
@@ -124,18 +119,6 @@ function SignIn() {
 
     return () => clearInterval(interval);
   }, [otpSent, otpTimer]);
-
-  useEffect(() => {
-    if (!emailOtpSent || emailOtpTimer <= 0) {
-      return undefined;
-    }
-
-    const interval = setInterval(() => {
-      setEmailOtpTimer((value) => Math.max(0, value - 1));
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [emailOtpSent, emailOtpTimer]);
 
   useEffect(() => {
     if (
@@ -161,19 +144,54 @@ function SignIn() {
     });
   }, [forgotMode]);
 
+  const accountExistsForLogin = async (payload) => {
+    try {
+      const response = await api.post("/auth/check-signup-account", payload);
+      return !response.data?.data?.available;
+    } catch (error) {
+      if (
+        error.response?.status === 409 &&
+        error.response?.data?.code === "ACCOUNT_EXISTS"
+      ) {
+        return true;
+      }
+      throw error;
+    }
+  };
+
+  const identifierPayload = (value) => {
+    const identifier = String(value || "").trim();
+    return identifier.includes("@")
+      ? buildOtpPayload({ email: identifier.toLowerCase() })
+      : buildOtpPayload({ phone: identifier.replace(/\D/g, "") });
+  };
+
   const sendOtp = async () => {
-    if (!/^[0-9]{10}$/.test(mobile)) {
-      window.alert("Enter a valid 10-digit mobile number.");
+    const identifier = otpIdentifier.trim();
+    const payload = identifierPayload(identifier);
+    if (
+      (!payload.email && !payload.phone) ||
+      (payload.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier)) ||
+      (payload.phone && !/^[0-9]{10}$/.test(identifier))
+    ) {
+      window.alert("Enter a valid email address or 10-digit mobile number.");
       return;
     }
 
     setLoading(true);
+    setUserNotFound(false);
     try {
-      await api.post("/auth/send-otp", buildOtpPayload({ phone: mobile }));
+      if (!(await accountExistsForLogin(payload))) {
+        setUserNotFound(true);
+        setOtpSent(false);
+        return;
+      }
+      await api.post("/auth/send-login-otp", payload);
       setOtpSent(true);
       setOtpTimer(30);
+      setOtp("");
     } catch (error) {
-      window.alert(error.response?.data?.message || "Unable to send OTP.");
+      window.alert(error.response?.data?.message || "Unable to check account or send OTP.");
     } finally {
       setLoading(false);
     }
@@ -184,7 +202,7 @@ function SignIn() {
 
     setLoading(true);
     try {
-      await api.post("/auth/send-otp", buildOtpPayload({ phone: mobile }));
+      await api.post("/auth/send-login-otp", identifierPayload(otpIdentifier));
       setOtpTimer(30);
     } catch (error) {
       window.alert(error.response?.data?.message || "Unable to resend OTP.");
@@ -193,66 +211,67 @@ function SignIn() {
     }
   };
 
-  const sendEmailOtp = async () => {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      window.alert("Enter a valid email address.");
-      return;
-    }
-
-    setLoading(true);
-    try {
-      await api.post("/auth/send-otp", buildOtpPayload({ email }));
-      setEmailOtpSent(true);
-      setEmailOtpTimer(30);
-      setEmailOtp("");
-    } catch (error) {
-      window.alert(error.response?.data?.message || "Unable to send email OTP.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const resendEmailOtp = async () => {
-    if (!emailOtpSent || emailOtpTimer > 0) return;
-
-    await sendEmailOtp();
-  };
-
   const signIn = async () => {
-    if (loginMethod === "mobile" && otp.length !== 6) {
+    const isOtpLogin = loginMethod === "otp";
+    const credentialLoginType = /^\d{6}$/.test(credentialValue) ? "pin" : "password";
+    if (isOtpLogin && otp.length !== 6) {
       window.alert("Enter the 6-digit OTP.");
       return;
     }
-
-    if (loginMethod === "email" && emailOtp.length !== 6) {
-      window.alert("Enter the 6-digit email OTP.");
+    if (!isOtpLogin && !/^(?:[^\s@]+@[^\s@]+\.[^\s@]+|[0-9]{10})$/.test(credentialIdentifier.trim())) {
+      window.alert("Enter a valid email address or 10-digit mobile number.");
+      return;
+    }
+    if (!isOtpLogin && !credentialValue) {
+      window.alert("Enter your password or 6-digit PIN.");
       return;
     }
 
     setLoading(true);
     try {
-      if (loginMethod === "mobile") {
-        await loginWithOtp(mobile, otp);
+      if (isOtpLogin) {
+        await loginWithOtp(otpIdentifier, otp);
       } else {
-        await loginWithOtp(email, emailOtp);
+        const normalizedIdentifier = identifierPayload(credentialIdentifier);
+        const loginIdentifier = normalizedIdentifier.email || normalizedIdentifier.phone;
+        if (!(await accountExistsForLogin(normalizedIdentifier))) {
+          setUserNotFound(true);
+          return;
+        }
+        await loginWithCredential(loginIdentifier, credentialValue, credentialLoginType);
       }
       setLoginSuccess(true);
     } catch (error) {
-      window.alert(error.response?.data?.message || error.message || "Unable to sign in.");
+      if (error.response?.data?.code === "USER_NOT_FOUND") {
+        setUserNotFound(true);
+      } else {
+        window.alert(error.response?.data?.message || error.message || "Unable to sign in.");
+      }
     } finally {
       setLoading(false);
     }
   };
 
   const sendForgotOtp = async () => {
+    const payload = identifierPayload(forgotIdentifier);
+    if (!payload.email && !payload.phone) {
+      window.alert("Enter a valid registered email address or 10-digit mobile number.");
+      return;
+    }
+
     setLoading(true);
-
-    await simulateDelay(500);
-
-    setForgotOtpSent(true);
-    setForgotOtpTimer(30);
-
-    setLoading(false);
+    try {
+      await api.post("/auth/send-recovery-otp", payload);
+      setForgotOtpSent(true);
+      setForgotOtpTimer(30);
+      setForgotOtp("");
+      setForgotCredential("");
+      setForgotCredentialConfirmation("");
+    } catch (error) {
+      window.alert(error.response?.data?.message || "Unable to send recovery OTP.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const resendForgotOtp = async () => {
@@ -264,12 +283,62 @@ function SignIn() {
     }
 
     setLoading(true);
+    try {
+      await api.post("/auth/send-recovery-otp", identifierPayload(forgotIdentifier));
+      setForgotOtpTimer(30);
+      setForgotOtp("");
+    } catch (error) {
+      window.alert(error.response?.data?.message || "Unable to resend recovery OTP.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    await simulateDelay(450);
+  const resetForgotCredential = async () => {
+    const payload = identifierPayload(forgotIdentifier);
+    const isValidCredential = forgotCredentialType === "pin"
+      ? /^\d{6}$/.test(forgotCredential)
+      : /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/.test(forgotCredential);
 
-    setForgotOtpTimer(30);
+    if (!payload.email && !payload.phone) {
+      window.alert("Enter your registered email address or mobile number.");
+      return;
+    }
+    if (!/^\d{6}$/.test(forgotOtp)) {
+      window.alert("Enter the 6-digit verification OTP.");
+      return;
+    }
+    if (!isValidCredential) {
+      window.alert(forgotCredentialType === "pin"
+        ? "Set a 6-digit PIN."
+        : "Set a password with at least 8 characters, including uppercase, lowercase, and a number.");
+      return;
+    }
+    if (forgotCredential !== forgotCredentialConfirmation) {
+      window.alert("Your password or PIN confirmation does not match.");
+      return;
+    }
 
-    setLoading(false);
+    setLoading(true);
+    try {
+      await api.post("/auth/reset-credential", {
+        ...payload,
+        otp: forgotOtp,
+        credentialType: forgotCredentialType,
+        credential: forgotCredential,
+      });
+      window.alert(`${forgotCredentialType === "pin" ? "PIN" : "Password"} reset successfully. Please log in.`);
+      setForgotMode(false);
+      setLoginMethod(forgotCredentialType);
+      setCredentialIdentifier(forgotIdentifier.trim());
+      setCredentialValue("");
+      setForgotOtpSent(false);
+      setForgotOtp("");
+    } catch (error) {
+      window.alert(error.response?.data?.message || "Unable to reset your password or PIN.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (loginSuccess) {
@@ -314,7 +383,7 @@ function SignIn() {
               type="button"
               className="primary-button full"
               onClick={() =>
-                navigate("/dashboard")
+                navigate("/dashboard/explore")
               }
             >
               Go to Dashboard
@@ -347,26 +416,21 @@ function SignIn() {
         {/* LEFT BRAND PANEL */}
 
         <aside className="brand-panel">
-          <button
-            type="button"
-            className="back-home"
-            onClick={() =>
-              navigate("/")
-            }
-          >
-            <ArrowLeft size={14} />
-            Back to Dhanvo
-          </button>
-
           <div className="brand-panel-content">
             <div className="brand">
               DHANVO
             </div>
 
-            <p className="tagline">
-              Empowering your wealth with
-              Trust, Technology &
-              Transparency.
+            <p className="brand-eyebrow">
+              TRUST · TECHNOLOGY · TRANSPARENCY
+            </p>
+
+            <h1 className="brand-title">
+              Welcome back to Dhanvo.
+            </h1>
+
+            <p className="brand-copy">
+              Log in to continue your investment journey with DHANVO.
             </p>
 
             <div className="brand-line" />
@@ -374,65 +438,42 @@ function SignIn() {
             <div className="trust-list">
               <div>
                 <span className="trust-icon">
-                  <ShieldCheck size={17} />
+                  <Check size={13} />
                 </span>
 
                 <div>
-                  <strong>
-                    Secure Access
-                  </strong>
-
-                  <small>
-                    Your account information
-                    stays protected.
-                  </small>
+                  <strong>Trust</strong>
+                  <small>Regulated &amp; 100% Secure</small>
                 </div>
               </div>
 
               <div>
                 <span className="trust-icon">
-                  <LockKeyhole size={17} />
+                  <Check size={13} />
                 </span>
 
                 <div>
-                  <strong>
-                    Protected Login
-                  </strong>
-
-                  <small>
-                    Secure authentication for
-                    your Dhanvo account.
-                  </small>
+                  <strong>Technology</strong>
+                  <small>Fast, Paperless &amp; Smart Setup</small>
                 </div>
               </div>
 
               <div>
                 <span className="trust-icon">
-                  <CheckCircle2 size={17} />
+                  <Check size={13} />
                 </span>
 
                 <div>
-                  <strong>
-                    Simple & Digital
-                  </strong>
-
-                  <small>
-                    Manage your investments
-                    from one place.
-                  </small>
+                  <strong>Transparency</strong>
+                  <small>Zero Hidden Charges, Pure Clarity</small>
                 </div>
               </div>
             </div>
           </div>
 
           <div className="brand-footer">
-            <span>
-              � {new Date().getFullYear()} DHANVO
-            </span>
-
-            <span>
-              www.dhanvo.in
-            </span>
+            <strong>Dhanlakshya Securities Private Limited</strong>
+            <span>DHANVO · Empowering your wealth with Trust, Technology &amp; Transparency.</span>
           </div>
         </aside>
 
@@ -457,28 +498,9 @@ function SignIn() {
 
           <div className="login-container">
             <div className="login-top">
-              <div className="desktop-brand">
-                <div className="brand">
-                  DHANVO
-                </div>
-              </div>
-
-              <div className="account-question">
-                <span>
-                  Don't have an account?
-                </span>
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    navigate(
-                      "/signup"
-                    )
-                  }
-                >
-                  Open Account
-                  <ArrowRight size={13} />
-                </button>
+              <div className="secure-login">
+                <LockKeyhole size={15} />
+                Secure login
               </div>
             </div>
 
@@ -504,93 +526,58 @@ function SignIn() {
                 >
                   <LoginCard>
                     <div className="login-heading">
-                      <div className="heading-icon">
-                        <LogIn size={20} />
-                      </div>
-
-                      <span className="eyebrow">
-                        DHANVO ACCOUNT
-                      </span>
-
                       <h1>
-                        Welcome Back
+                        Log in
                       </h1>
 
                       <p>
-                        Sign in to access your
-                        Dhanvo account and manage
-                        your investments.
+                        Access your Dhanvo account to track and manage your investments.
                       </p>
                     </div>
 
                     {/* LOGIN METHOD */}
 
-                    <div className="method-tabs">
+                    <div className="method-tabs" role="group" aria-label="Choose login method">
                       <button
                         type="button"
-                        className={
-                          loginMethod ===
-                          "mobile"
-                            ? "active"
-                            : ""
-                        }
+                        className={loginMethod === "otp" ? "active" : ""}
                         onClick={() => {
-                          setLoginMethod(
-                            "mobile"
-                          );
+                          setLoginMethod("otp");
+                          setUserNotFound(false);
                           setOtpSent(false);
-                        }}
-                      >
-                        <Smartphone
-                          size={14}
-                        />
-                        Mobile
-                      </button>
-
-                      <button
-                        type="button"
-                        className={
-                          loginMethod ===
-                          "email"
-                            ? "active"
-                            : ""
-                        }
-                        onClick={() => {
-                          setLoginMethod(
-                            "email"
-                          );
-                          setOtpSent(false);
+                          setOtp("");
                         }}
                       >
                         <Mail size={14} />
-                        Email
+                        Email / Phone
+                      </button>
+
+                      <button
+                        type="button"
+                        className={loginMethod === "credential" ? "active" : ""}
+                        onClick={() => {
+                          setLoginMethod("credential");
+                          setUserNotFound(false);
+                          setOtpSent(false);
+                        }}
+                      >
+                        <LockKeyhole size={14} />
+                        Password / PIN
                       </button>
                     </div>
 
-                    {loginMethod ===
-                      "mobile" ? (
+                    {loginMethod === "otp" ? (
                       <>
                         <Field
-                          label="Mobile Number"
-                          value={mobile}
-                          inputMode="numeric"
-                          maxLength={10}
-                          placeholder="Enter 10-digit mobile number"
-                          showPrefix
-                          onChange={(value) =>
-                            setMobile(
-                              value
-                                .replace(
-                                  /\D/g,
-                                  ""
-                                )
-                                .slice(
-                                  0,
-                                  10
-                                )
-                            )
-                          }
-                          rightElement={null}
+                          label="Email ID or Mobile Number"
+                          value={otpIdentifier}
+                          placeholder="Enter your email or 10-digit mobile"
+                          onChange={(value) => {
+                            setOtpIdentifier(value);
+                            setUserNotFound(false);
+                            setOtpSent(false);
+                            setOtp("");
+                          }}
                         />
 
                         <div className="otp-action">
@@ -653,9 +640,7 @@ function SignIn() {
 
                             <div className="otp-status">
                               <span>
-                                OTP sent to your
-                                registered mobile
-                                number.
+                                OTP sent to your registered {otpIdentifier.includes("@") ? "email" : "mobile number"}.
                               </span>
 
                               {otpTimer >
@@ -670,9 +655,7 @@ function SignIn() {
                               ) : (
                                 <button
                                   type="button"
-                                  onClick={
-                                    resendOtp
-                                  }
+                                  onClick={resendOtp}
                                 >
                                   Resend OTP
                                 </button>
@@ -684,62 +667,31 @@ function SignIn() {
                     ) : (
                       <>
                         <Field
-                          label="Email ID"
-                          type="email"
-                          value={email}
-                          placeholder="Enter registered email"
-                          onChange={
-                            setEmail
-                          }
+                          label="Email ID or Mobile Number"
+                          value={credentialIdentifier}
+                          placeholder="Enter your email or 10-digit mobile"
+                          onChange={(value) => {
+                            setCredentialIdentifier(value);
+                            setUserNotFound(false);
+                          }}
                         />
-
-                        <div className="otp-action">
-                          <button
-                            type="button"
-                            className="send-otp"
-                            onClick={sendEmailOtp}
-                            disabled={loading}
-                          >
-                            {loading ? (
-                              <Loader2 size={15} className="spin" />
-                            ) : (
-                              <Mail size={15} />
-                            )}
-                            Send Email OTP
-                          </button>
-                        </div>
-
-                        {emailOtpSent && (
-                          <motion.div
-                            className="otp-area"
-                            initial={{ opacity: 0, height: 0 }}
-                            animate={{ opacity: 1, height: "auto" }}
-                          >
-                            <Field
-                              label="Enter Email OTP"
-                              value={emailOtp}
-                              inputMode="numeric"
-                              maxLength={6}
-                              placeholder="Enter 6-digit OTP"
-                              onChange={(value) =>
-                                setEmailOtp(value.replace(/\D/g, "").slice(0, 6))
-                              }
-                            />
-
-                            <div className="otp-status">
-                              <span>OTP sent to your registered email.</span>
-
-                              {emailOtpTimer > 0 ? (
-                                <strong>Resend in {emailOtpTimer}s</strong>
-                              ) : (
-                                <button type="button" onClick={resendEmailOtp}>
-                                  Resend OTP
-                                </button>
-                              )}
-                            </div>
-                          </motion.div>
-                        )}
+                        <Field
+                          label="Password / PIN"
+                          type="password"
+                          value={credentialValue}
+                          placeholder="Enter your password or 6-digit PIN"
+                          onChange={setCredentialValue}
+                        />
                       </>
+                    )}
+
+                    {userNotFound && (
+                      <div className="user-not-found" role="alert">
+                        <span>User does not exist</span>
+                        <button type="button" onClick={() => navigate("/signup")}>
+                          Sign Up
+                        </button>
+                      </div>
                     )}
 
                     {/* REMEMBER / FORGOT */}
@@ -773,13 +725,13 @@ function SignIn() {
                       <button
                         type="button"
                         className="forgot-button"
-                        onClick={() =>
-                          setForgotMode(
-                            true
-                          )
-                        }
+                        onClick={() => {
+                          setForgotMode(true);
+                          setForgotOtpSent(false);
+                          setForgotOtp("");
+                        }}
                       >
-                        Forgot Password?
+                        Forgot Password / PIN?
                       </button>
                     </div>
 
@@ -805,7 +757,7 @@ function SignIn() {
                         </>
                       ) : (
                         <>
-                          Sign In
+                          Log in
                           <ArrowRight
                             size={17}
                           />
@@ -905,14 +857,11 @@ function SignIn() {
                       </span>
 
                       <h1>
-                        Forgot Password?
+                        Forgot Password / PIN?
                       </h1>
 
                       <p>
-                        Enter your registered
-                        mobile number or email
-                        to receive a verification
-                        OTP.
+                        Use the same registered email or mobile number as signup. The verification OTP is sent to your registered email.
                       </p>
                     </div>
 
@@ -922,10 +871,39 @@ function SignIn() {
                         forgotIdentifier
                       }
                       placeholder="Enter mobile or email"
-                      onChange={
-                        setForgotIdentifier
-                      }
+                      onChange={(value) => {
+                        setForgotIdentifier(value);
+                        setForgotOtpSent(false);
+                        setForgotOtp("");
+                      }}
                     />
+
+                    <div className="recovery-method-tabs" role="group" aria-label="Choose credential to recover">
+                      <button
+                        type="button"
+                        className={forgotCredentialType === "password" ? "active" : ""}
+                        aria-pressed={forgotCredentialType === "password"}
+                        onClick={() => {
+                          setForgotCredentialType("password");
+                          setForgotCredential("");
+                          setForgotCredentialConfirmation("");
+                        }}
+                      >
+                        Reset Password
+                      </button>
+                      <button
+                        type="button"
+                        className={forgotCredentialType === "pin" ? "active" : ""}
+                        aria-pressed={forgotCredentialType === "pin"}
+                        onClick={() => {
+                          setForgotCredentialType("pin");
+                          setForgotCredential("");
+                          setForgotCredentialConfirmation("");
+                        }}
+                      >
+                        Reset PIN
+                      </button>
+                    </div>
 
                     {!forgotOtpSent ? (
                       <button
@@ -972,29 +950,13 @@ function SignIn() {
                           <div className="forgot-otp">
                             <Field
                               label="Enter OTP"
-                              value={
-                                otp
-                              }
+                              value={forgotOtp}
                               maxLength={
                                 6
                               }
                               inputMode="numeric"
                               placeholder="Enter 6-digit OTP"
-                              onChange={(
-                                value
-                              ) =>
-                                setOtp(
-                                  value
-                                    .replace(
-                                      /\D/g,
-                                      ""
-                                    )
-                                    .slice(
-                                      0,
-                                      6
-                                    )
-                                )
-                              }
+                              onChange={(value) => setForgotOtp(value.replace(/\D/g, "").slice(0, 6))}
                             />
 
                             <div className="otp-status">
@@ -1026,26 +988,37 @@ function SignIn() {
                             </div>
                           </div>
 
+                          <Field
+                            label={forgotCredentialType === "pin" ? "New 6-digit PIN" : "New Password"}
+                            type="password"
+                            value={forgotCredential}
+                            inputMode={forgotCredentialType === "pin" ? "numeric" : undefined}
+                            maxLength={forgotCredentialType === "pin" ? 6 : undefined}
+                            placeholder={forgotCredentialType === "pin" ? "Enter new 6-digit PIN" : "At least 8 characters"}
+                            onChange={(value) => setForgotCredential(
+                              forgotCredentialType === "pin" ? value.replace(/\D/g, "").slice(0, 6) : value
+                            )}
+                          />
+                          <Field
+                            label={forgotCredentialType === "pin" ? "Confirm PIN" : "Confirm Password"}
+                            type="password"
+                            value={forgotCredentialConfirmation}
+                            inputMode={forgotCredentialType === "pin" ? "numeric" : undefined}
+                            maxLength={forgotCredentialType === "pin" ? 6 : undefined}
+                            placeholder={forgotCredentialType === "pin" ? "Re-enter new PIN" : "Re-enter new password"}
+                            onChange={(value) => setForgotCredentialConfirmation(
+                              forgotCredentialType === "pin" ? value.replace(/\D/g, "").slice(0, 6) : value
+                            )}
+                          />
+                          <p className="recovery-hint">
+                            {forgotCredentialType === "pin"
+                              ? "PIN must contain exactly 6 digits."
+                              : "Password must contain uppercase, lowercase, and a number (8 characters minimum)."}
+                          </p>
                           <button
                             type="button"
                             className="primary-button login-button"
-                            onClick={() => {
-                              setLoading(
-                                true
-                              );
-
-                              setTimeout(
-                                () => {
-                                  setLoading(
-                                    false
-                                  );
-                                  alert(
-                                    "OTP verified. Password reset flow can continue here."
-                                  );
-                                },
-                                500
-                              );
-                            }}
+                            onClick={resetForgotCredential}
                             disabled={
                               loading
                             }
@@ -1058,11 +1031,11 @@ function SignIn() {
                                   }
                                   className="spin"
                                 />
-                                Verifying...
+                                Resetting...
                               </>
                             ) : (
                               <>
-                                Verify & Continue
+                                Reset {forgotCredentialType === "pin" ? "PIN" : "Password"}
                                 <ArrowRight
                                   size={
                                     17
@@ -1081,9 +1054,7 @@ function SignIn() {
                       />
 
                       <span>
-                        For this frontend
-                        preview, OTP validation
-                        does not block the flow.
+                        Your credential is updated only after the server verifies your recovery OTP.
                       </span>
                     </div>
                   </LoginCard>
@@ -1912,6 +1883,413 @@ button:disabled { cursor: not-allowed; }
 
   .bottom-links {
     flex-wrap: wrap;
+  }
+}
+
+/* Login page alignment with the reference composition */
+.signin-page {
+  background: #fff;
+}
+
+.brand-panel {
+  width: 36%;
+  max-width: none;
+  padding: 44px 40px;
+}
+
+.brand-panel-content {
+  margin: 0;
+}
+
+.brand-panel .brand {
+  color: #E7C98C !important;
+  font-family: 'Manrope', Arial, sans-serif;
+  font-size: 26px;
+  letter-spacing: .5px;
+}
+
+.brand-eyebrow {
+  margin: 40px 0 0;
+  color: #E7C98C;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.6px;
+}
+
+.brand-title {
+  max-width: 420px;
+  margin: 13px 0 14px;
+  color: #fff;
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: 36px;
+  font-weight: 600;
+  letter-spacing: -1.2px;
+  line-height: 1.12;
+}
+
+.brand-copy {
+  max-width: 400px;
+  margin: 0;
+  color: #CBD5DF;
+  font-size: 13.5px;
+  line-height: 1.65;
+}
+
+.brand-line {
+  display: none;
+}
+
+.trust-list {
+  gap: 14px;
+  margin-top: 32px;
+}
+
+.trust-list > div {
+  align-items: center;
+  gap: 11px;
+}
+
+.trust-icon {
+  width: 21px;
+  height: 21px;
+  min-width: 21px;
+  border: 1px solid rgba(216,179,107,.5);
+  border-radius: 50%;
+  background: transparent;
+  color: #E7C98C;
+}
+
+.trust-list strong {
+  display: inline;
+  margin: 0;
+  color: #E7C98C;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.trust-list small {
+  display: inline;
+  margin: 0 0 0 4px;
+  color: #fff;
+  font-size: 13px;
+}
+
+.brand-footer {
+  padding-top: 24px;
+  border: 0;
+  display: block;
+  color: #8FA0B0;
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+.brand-footer strong {
+  display: block;
+  color: #E7C98C;
+  font-weight: 700;
+}
+
+.brand-footer span {
+  display: block;
+}
+
+.login-area {
+  width: 64%;
+  margin-left: 36%;
+  background: #fff;
+}
+
+.login-container {
+  width: min(420px, calc(100% - 80px));
+  padding: 48px 0;
+}
+
+.login-top {
+  justify-content: flex-end;
+  margin-bottom: 24px;
+}
+
+.secure-login {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #9FB3C8;
+  font-size: 12px;
+}
+
+.secure-login svg {
+  color: #AAB4BE;
+}
+
+.login-card {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.login-heading {
+  text-align: left;
+}
+
+.login-heading h1 {
+  margin: 0 0 9px;
+  color: ${NAVY};
+  font-size: 32px;
+  letter-spacing: -.6px;
+}
+
+.login-heading p {
+  max-width: none;
+  margin: 0 0 26px;
+  color: #45526A;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.method-tabs {
+  margin: 0 0 24px;
+  padding: 4px;
+  border-radius: 9px;
+  background: #EEF1F4;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.method-tabs button {
+  height: 39px;
+  border-radius: 7px;
+  gap: 5px;
+  font-size: 11px;
+}
+
+.method-tabs button.active {
+  box-shadow: 0 1px 3px rgba(10,25,41,.08);
+}
+
+.field {
+  margin-bottom: 18px;
+}
+
+.field label {
+  margin-bottom: 8px;
+  color: ${NAVY};
+  font-size: 12px;
+}
+
+.field input {
+  height: 49px;
+  border-color: rgba(10,25,41,.10);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.field input:focus {
+  box-shadow: 0 0 0 3px rgba(201,151,74,.14);
+}
+
+.input-wrap .inline-prefix + input {
+  padding-left: 48px;
+}
+
+.otp-action {
+  margin: -2px 0 4px;
+}
+
+.send-otp {
+  min-height: 40px;
+  border-color: rgba(201,151,74,.55);
+  border-radius: 8px;
+  font-size: 11px;
+}
+
+.otp-area {
+  border-radius: 8px;
+}
+
+.login-options {
+  margin: 6px 0 22px;
+}
+
+.user-not-found {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 14px 0 18px;
+  padding: 12px 14px;
+  border: 1px solid rgba(201,151,74,.35);
+  border-radius: 8px;
+  background: rgba(201,151,74,.08);
+  color: ${NAVY};
+  font-size: 13px;
+}
+
+.user-not-found button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #A87832;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.remember,
+.forgot-button {
+  font-size: 12px;
+}
+
+.primary-button {
+  min-height: 50px;
+  border-radius: 8px;
+  font-size: 13px;
+  box-shadow: none;
+}
+
+.primary-button:hover {
+  background: #A87832;
+  transform: none;
+}
+
+.security-note {
+  margin-top: 21px;
+  padding-top: 16px;
+  font-size: 10px;
+}
+
+.bottom-links {
+  margin-top: 24px;
+  font-size: 10px;
+}
+
+.bottom-links button,
+.bottom-links span {
+  font-size: 10px;
+}
+
+.back-login {
+  font-size: 11px;
+}
+
+.forgot-heading {
+  margin-bottom: 24px;
+}
+
+.forgot-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: ${GOLD};
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.recovery-method-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 18px;
+}
+
+.recovery-method-tabs button {
+  min-height: 40px;
+  border: 1px solid #DCE2E8;
+  border-radius: 8px;
+  background: #fff;
+  color: #657388;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.recovery-method-tabs button.active {
+  border-color: ${GOLD};
+  background: rgba(201,151,74,.09);
+  color: ${NAVY};
+}
+
+.recovery-hint {
+  margin: -9px 0 17px;
+  color: #7A8798;
+  font-size: 10px;
+}
+
+@media (max-width: 900px) {
+  .signin-page {
+    display: block;
+  }
+
+  .brand-panel {
+    position: relative;
+    display: flex;
+    width: 100%;
+    min-height: auto;
+    padding: 26px 22px 24px;
+  }
+
+  .brand-panel .brand {
+    font-size: 26px;
+  }
+
+  .brand-eyebrow {
+    margin-top: 22px;
+  }
+
+  .brand-title {
+    font-size: 30px;
+  }
+
+  .trust-list {
+    display: none;
+  }
+
+  .brand-footer {
+    margin-top: 20px;
+    padding-top: 0;
+  }
+
+  .login-area {
+    display: flex;
+    width: 100%;
+    min-height: auto;
+    margin: 0;
+    padding: 32px 20px 48px;
+    align-items: flex-start;
+  }
+
+  .login-container {
+    width: 100%;
+    max-width: 420px;
+    padding: 0;
+  }
+
+  .login-card {
+    padding: 0;
+    border-radius: 0;
+  }
+
+  .mobile-header {
+    display: none;
+  }
+}
+
+@media (max-width: 520px) {
+}
+
+@media (max-width: 390px) {
+  .login-area {
+    padding: 28px 20px 40px;
+  }
+
+  .login-container {
+    width: 100%;
+  }
+
+  .login-card {
+    padding: 0;
   }
 }
 `;

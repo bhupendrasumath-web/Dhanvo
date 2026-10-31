@@ -82,25 +82,47 @@ export const login = async (req, res) => {
       });
     }
 
-    const { email, password } = req.body;
+    const identifier = String(
+      req.body.identifier || req.body.email || req.body.phone || ''
+    ).trim();
+    const credentialType = String(
+      req.body.loginType || (req.body.pin ? 'pin' : 'password')
+    ).trim().toLowerCase();
+    const credential = credentialType === 'pin' ? req.body.pin : req.body.password;
+    const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier);
+    const isPhone = /^[0-9]{10}$/.test(identifier);
+
+    if (
+      (!isEmail && !isPhone) ||
+      (credentialType !== 'password' && credentialType !== 'pin') ||
+      typeof credential !== 'string' ||
+      !credential
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Enter a valid email or mobile number and your password or PIN',
+      });
+    }
 
     // Find user and include password
-    const existingUser = await User.findOne({ email });
+    const existingUser = await User.findOne(
+      isEmail ? { email: identifier.toLowerCase() } : { phone: identifier }
+    );
     if (!existingUser) {
       return res.status(401).json({ 
         success: false, 
-        message: 'Invalid email or password' 
+        message: 'Invalid email/mobile number or password/PIN'
       });
     }
 
     const user = existingUser.select ? existingUser.select('+password') : existingUser;
 
-    // Check password
-    const isMatch = await user.comparePassword(password);
+    const isMatch = user.loginCredentialType === credentialType
+      && await user.comparePassword(credential);
     if (!isMatch) {
       return res.status(401).json({ 
         success: false, 
-        message: 'Invalid email or password' 
+        message: 'Invalid email/mobile number or password/PIN'
       });
     }
 
@@ -172,6 +194,17 @@ export const getMe = async (req, res) => {
   }
 };
 
+export const refreshSession = (req, res) => {
+  const token = generateToken(req.user._id, req.auth.sessionStartedAt);
+  return res.json({
+    success: true,
+    data: {
+      token,
+      sessionExpiresAt: req.auth.sessionExpiresAt,
+    },
+  });
+};
+
 // @desc    Update user profile
 // @route   PUT /api/auth/profile
 // @access  Private
@@ -191,7 +224,27 @@ export const updateProfile = async (req, res) => {
     res.json({
       success: true,
       message: 'Profile updated successfully',
-      data: user
+      data: {
+        _id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phone: user.phone,
+        pan: user.pan,
+        nseClientCode: user.nseClientCode,
+        nseUccRegistered: user.nseUccRegistered,
+        nseUccRegisteredAt: user.nseUccRegisteredAt,
+        accountOpeningStatus: user.accountOpeningStatus,
+        nseStatus: user.nseStatus,
+        nseStatusRemark: user.nseStatusRemark,
+        nseStatusCheckedAt: user.nseStatusCheckedAt,
+        nseRegId: user.nseRegId,
+        accountBalance: user.accountBalance,
+        isVerified: user.isVerified,
+        portfolio: user.portfolio,
+        watchlist: user.watchlist,
+        createdAt: user.createdAt
+      }
     });
   } catch (error) {
     console.error('Update profile error:', error);

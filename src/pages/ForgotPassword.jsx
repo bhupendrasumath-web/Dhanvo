@@ -1,15 +1,95 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Mail, ArrowLeft, ShieldCheck, TrendingUp } from "lucide-react";
+import { Mail, ArrowLeft, ShieldCheck, TrendingUp, Loader2 } from "lucide-react";
+import api, { buildOtpPayload } from "../services/api";
 
 export default function ForgotPassword() {
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
+  const [credentialType, setCredentialType] = useState("password");
+  const [otp, setOtp] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
+  const [credential, setCredential] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    navigate("/verify-otp");
+  const getIdentifierPayload = () => {
+    const value = identifier.trim();
+    return value.includes("@")
+      ? buildOtpPayload({ email: value.toLowerCase() })
+      : buildOtpPayload({ phone: value.replace(/\D/g, "") });
+  };
+
+  const sendOtp = async () => {
+    const payload = getIdentifierPayload();
+    if (!payload.email && !payload.phone) {
+      setErrorMessage("Enter a valid registered email or 10-digit mobile number.");
+      return;
+    }
+
+    setLoading(true);
+    setErrorMessage("");
+    setSuccessMessage("");
+    try {
+      await api.post("/auth/send-recovery-otp", payload);
+      setOtpSent(true);
+      setOtp("");
+      setCredential("");
+      setConfirmation("");
+      setSuccessMessage("Recovery OTP sent to your registered email.");
+    } catch (error) {
+      setErrorMessage(error.response?.data?.message || "Unable to send recovery OTP.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const resetCredential = async (event) => {
+    event.preventDefault();
+    const payload = getIdentifierPayload();
+    const validCredential = credentialType === "pin"
+      ? /^\d{6}$/.test(credential)
+      : /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/.test(credential);
+
+    if (!/^\d{6}$/.test(otp)) {
+      setErrorMessage("Enter the 6-digit verification OTP.");
+      return;
+    }
+    if (!validCredential) {
+      setErrorMessage(credentialType === "pin"
+        ? "Choose a 6-digit PIN."
+        : "Password needs at least 8 characters, including uppercase, lowercase, and a number.");
+      return;
+    }
+    if (credential !== confirmation) {
+      setErrorMessage("Your password or PIN confirmation does not match.");
+      return;
+    }
+
+    setLoading(true);
+    setErrorMessage("");
+    setSuccessMessage("");
+    try {
+      await api.post("/auth/reset-credential", {
+        ...payload,
+        otp,
+        credentialType,
+        credential,
+      });
+      setSuccessMessage(`${credentialType === "pin" ? "PIN" : "Password"} reset successfully. You can now log in.`);
+      setOtpSent(false);
+      setOtp("");
+      setCredential("");
+      setConfirmation("");
+      window.setTimeout(() => navigate("/login"), 1200);
+    } catch (error) {
+      setErrorMessage(error.response?.data?.message || "Unable to reset your password or PIN.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -75,33 +155,133 @@ export default function ForgotPassword() {
           </Link>
 
           <h2 className="text-3xl font-bold text-white mt-8">
-            Forgot Password?
+            Forgot Password / PIN?
           </h2>
 
           <p className="text-slate-400 mt-2 mb-8">
-            Enter your registered mobile number or email address to
-            receive a verification code.
+            Enter the email or mobile number you used during signup. If you use mobile, the recovery OTP will be sent to your registered email.
           </p>
 
-          <form onSubmit={handleSubmit}>
-            <div className="relative mb-6">
+          <form
+            onSubmit={(event) => {
+              if (!otpSent) {
+                event.preventDefault();
+                sendOtp();
+                return;
+              }
+              resetCredential(event);
+            }}
+          >
+            <div className="relative mb-4">
               <Mail className="absolute left-4 top-4 text-slate-400 w-5 h-5" />
 
               <input
                 type="text"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                value={identifier}
+                onChange={(event) => {
+                  setIdentifier(event.target.value);
+                  setOtpSent(false);
+                  setOtp("");
+                }}
                 placeholder="Mobile Number or Email Address"
                 className="w-full bg-slate-800 text-white pl-12 pr-4 py-4 rounded-xl outline-none"
               />
             </div>
 
-            <button
-              type="submit"
-              className="w-full bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 text-black font-bold py-4 rounded-xl transition-all duration-300"
-            >
-              Send Verification Code
-            </button>
+            <div className="grid grid-cols-2 gap-2 mb-5">
+              {["password", "pin"].map((type) => (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => {
+                    setCredentialType(type);
+                    setCredential("");
+                    setConfirmation("");
+                  }}
+                  className={`rounded-xl border py-3 font-semibold transition-colors ${
+                    credentialType === type
+                      ? "border-amber-400 bg-amber-400/10 text-amber-300"
+                      : "border-slate-700 bg-slate-800 text-slate-300"
+                  }`}
+                >
+                  Reset {type === "pin" ? "PIN" : "Password"}
+                </button>
+              ))}
+            </div>
+
+            {otpSent && (
+              <>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  value={otp}
+                  onChange={(event) => setOtp(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                  placeholder="6-digit verification OTP"
+                  className="w-full bg-slate-800 text-white px-4 py-4 rounded-xl outline-none mb-4"
+                />
+                <input
+                  type="password"
+                  inputMode={credentialType === "pin" ? "numeric" : undefined}
+                  maxLength={credentialType === "pin" ? 6 : undefined}
+                  value={credential}
+                  onChange={(event) => setCredential(credentialType === "pin"
+                    ? event.target.value.replace(/\D/g, "").slice(0, 6)
+                    : event.target.value)}
+                  placeholder={credentialType === "pin" ? "New 6-digit PIN" : "New password"}
+                  className="w-full bg-slate-800 text-white px-4 py-4 rounded-xl outline-none mb-4"
+                />
+                <input
+                  type="password"
+                  inputMode={credentialType === "pin" ? "numeric" : undefined}
+                  maxLength={credentialType === "pin" ? 6 : undefined}
+                  value={confirmation}
+                  onChange={(event) => setConfirmation(credentialType === "pin"
+                    ? event.target.value.replace(/\D/g, "").slice(0, 6)
+                    : event.target.value)}
+                  placeholder={credentialType === "pin" ? "Confirm PIN" : "Confirm password"}
+                  className="w-full bg-slate-800 text-white px-4 py-4 rounded-xl outline-none mb-4"
+                />
+                <p className="text-xs text-slate-400 mb-5">
+                  {credentialType === "pin"
+                    ? "PIN must contain exactly 6 digits."
+                    : "Password needs at least 8 characters, uppercase, lowercase, and a number."}
+                </p>
+              </>
+            )}
+
+            {errorMessage && <p role="alert" className="text-sm text-red-300 mb-4">{errorMessage}</p>}
+            {successMessage && <p role="status" className="text-sm text-emerald-300 mb-4">{successMessage}</p>}
+
+            {!otpSent ? (
+              <button
+                type="button"
+                onClick={sendOtp}
+                disabled={loading}
+                className="w-full bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 disabled:opacity-60 text-black font-bold py-4 rounded-xl transition-all duration-300"
+              >
+                {loading ? <Loader2 className="animate-spin mx-auto" /> : "Send Verification OTP"}
+              </button>
+            ) : (
+              <div className="space-y-3">
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 disabled:opacity-60 text-black font-bold py-4 rounded-xl transition-all duration-300"
+                >
+                  {loading ? <Loader2 className="animate-spin mx-auto" /> : `Reset ${credentialType === "pin" ? "PIN" : "Password"}`}
+                </button>
+                <button
+                  type="button"
+                  onClick={sendOtp}
+                  disabled={loading}
+                  className="w-full text-amber-300 text-sm font-semibold py-2 disabled:opacity-60"
+                >
+                  Resend OTP
+                </button>
+              </div>
+            )}
           </form>
 
           <div className="mt-6 bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4">

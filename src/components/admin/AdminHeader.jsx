@@ -1,5 +1,27 @@
-import { Bell, Menu, Settings } from 'lucide-react';
+import { LogOut, Menu, RefreshCw, ShieldCheck } from 'lucide-react';
 
-const AdminHeader = ({ onMenuClick }) => <header className="sticky top-0 z-30 bg-dark-950/85 backdrop-blur-xl border-b border-dark-800 px-4 sm:px-6 py-4"><div className="flex items-center justify-between gap-4"><div className="flex items-center gap-3 min-w-0"><button className="lg:hidden p-2 -ml-2 text-dark-400 hover:text-white" onClick={onMenuClick} aria-label="Open admin navigation"><Menu className="w-5 h-5" /></button><div className="min-w-0"><p className="text-dark-500 text-xs uppercase tracking-[0.18em]">Operations center</p><h1 className="text-xl sm:text-2xl text-white font-display font-bold truncate">Good morning, Harshit</h1></div></div><div className="flex items-center gap-2"><button className="p-2.5 rounded-xl border border-dark-700 bg-dark-900 text-dark-400 hover:text-white" title="Settings"><Settings className="w-4 h-4" /></button><button className="relative p-2.5 rounded-xl border border-dark-700 bg-dark-900 text-dark-400 hover:text-white" title="Notifications"><Bell className="w-4 h-4" /><span className="absolute top-2 right-2 w-1.5 h-1.5 bg-primary-400 rounded-full" /></button></div></div></header>;
+const AdminHeader = ({ onMenuClick, onRefresh, refreshing, onSignOut }) => (
+  <header className="top" style={{ padding: '12px 28px', background: '#071d32', borderBottom: '1px solid rgba(156, 176, 198, 0.16)' }}>
+    <button type="button" className="icon-btn menu lg:hidden" onClick={onMenuClick} aria-label="Open admin navigation" style={{ background: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.12)', color: '#edf4ff' }}>
+      <Menu className="h-5 w-5" />
+    </button>
+
+    <div className="top-right" style={{ marginLeft: 'auto' }}>
+      <button type="button" onClick={onRefresh} disabled={refreshing} className="icon-btn" title="Refresh dashboard" aria-label="Refresh dashboard" style={{ background: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.12)', color: '#edf4ff' }}>
+        <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+      </button>
+
+      <div className="user" style={{ paddingRight: '8px', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', boxShadow: 'none', color: '#edf4ff' }}>
+        <span className="avatar" aria-hidden="true" style={{ background: '#0d5e57', color: '#fff' }}><ShieldCheck className="h-4 w-4" /></span>
+        <span className="meta" style={{ display: 'block' }}><b>Admin session</b><span>Authenticated</span></span>
+      </div>
+
+      <button type="button" onClick={onSignOut} className="btn ghost sm" style={{ borderRadius: '999px', background: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.12)', color: '#edf4ff', boxShadow: 'none' }}>
+        <LogOut className="h-3.5 w-3.5" />
+        <span>Sign out</span>
+      </button>
+    </div>
+  </header>
+);
 
 export default AdminHeader;

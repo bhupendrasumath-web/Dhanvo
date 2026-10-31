@@ -437,6 +437,12 @@ function Step1({
   form,
   update,
   onIdentityChange,
+  credentialType,
+  setCredentialType,
+  credential,
+  setCredential,
+  credentialConfirmation,
+  setCredentialConfirmation,
   otpSent,
   otpVerified,
   otpTimer,
@@ -487,7 +493,7 @@ function Step1({
 
             <button
               type="button"
-              className="outline-button"
+              className="outline-button send-otp-button"
               onClick={sendOtp}
               disabled={loading}
             >
@@ -528,6 +534,72 @@ function Step1({
                   )
                 }
               />
+
+              {form.otp.length === 6 && !otpVerified && (
+                <div className="signup-credential-panel">
+                  <div>
+                    <strong>Sign Up – set PIN &amp; Password</strong>
+                    <span>Choose one login method for your account.</span>
+                  </div>
+
+                  <div className="signup-credential-options" role="group" aria-label="Choose a login credential">
+                    <button
+                      type="button"
+                      className={credentialType === "password" ? "active" : ""}
+                      aria-pressed={credentialType === "password"}
+                      onClick={() => {
+                        setCredentialType("password");
+                        setCredential("");
+                        setCredentialConfirmation("");
+                      }}
+                    >
+                      Password
+                    </button>
+                    <button
+                      type="button"
+                      className={credentialType === "pin" ? "active" : ""}
+                      aria-pressed={credentialType === "pin"}
+                      onClick={() => {
+                        setCredentialType("pin");
+                        setCredential("");
+                        setCredentialConfirmation("");
+                      }}
+                    >
+                      6-digit PIN
+                    </button>
+                  </div>
+
+                  <div className="signup-credential-fields">
+                    <Field
+                      label={credentialType === "pin" ? "Set 6-digit PIN" : "Set Password"}
+                      type="password"
+                      value={credential}
+                      inputMode={credentialType === "pin" ? "numeric" : undefined}
+                      maxLength={credentialType === "pin" ? 6 : undefined}
+                      placeholder={credentialType === "pin" ? "Enter 6-digit PIN" : "At least 8 characters"}
+                      onChange={(value) => setCredential(
+                        credentialType === "pin" ? value.replace(/\D/g, "").slice(0, 6) : value
+                      )}
+                    />
+                    <Field
+                      label={credentialType === "pin" ? "Confirm PIN" : "Confirm Password"}
+                      type="password"
+                      value={credentialConfirmation}
+                      inputMode={credentialType === "pin" ? "numeric" : undefined}
+                      maxLength={credentialType === "pin" ? 6 : undefined}
+                      placeholder={credentialType === "pin" ? "Re-enter 6-digit PIN" : "Re-enter password"}
+                      onChange={(value) => setCredentialConfirmation(
+                        credentialType === "pin" ? value.replace(/\D/g, "").slice(0, 6) : value
+                      )}
+                    />
+                  </div>
+                  <p className="signup-credential-hint">
+                    {credentialType === "pin"
+                      ? "Your PIN must contain exactly 6 digits."
+                      : "Use at least 8 characters with uppercase, lowercase, and a number."}
+                  </p>
+                </div>
+              )}
 
               <button
                 type="button"
@@ -1705,7 +1777,7 @@ function Step5({
                 }
                 options={[
                   "PAN",
-                  "Aadhaar � last 4 digits",
+                  "Aadhaar - last 4 digits",
                   "Driving Licence",
                   "OCI/Passport",
                 ]}
@@ -1976,7 +2048,7 @@ function ReviewRow({ label, value }) {
   return (
     <div className="review-row">
       <span>{label}</span>
-      <strong>{value || "�"}</strong>
+      <strong>{value || "\u2014"}</strong>
     </div>
   );
 }
@@ -2383,7 +2455,12 @@ function Step7({
   panVerified,
   ekycStartedForPan,
   ekycVerificationUrl,
+  kycPolling,
 }) {
+  const isPendingEkyc =
+    ekycStartedForPan === String(form.pan || "").trim().toUpperCase() &&
+    !panVerified;
+
   return (
     <div className="stack">
       <Section
@@ -2528,7 +2605,7 @@ function Step7({
             type="button"
             className="primary-button"
             onClick={submit}
-            disabled={loading}
+            disabled={loading || (isPendingEkyc && !kycPolling) || kycPolling}
           >
             {loading ? (
               <>
@@ -2537,6 +2614,14 @@ function Step7({
                   className="spin"
                 />
                 Submitting...
+              </>
+            ) : kycPolling || isPendingEkyc ? (
+              <>
+                <Loader2
+                  size={17}
+                  className="spin"
+                />
+                Checking KYC...
               </>
             ) : (
               <>
@@ -2624,6 +2709,9 @@ function OpenAccount() {
   const [otpSent, setOtpSent] = useState(Boolean(savedSession.otpSent));
   const [otpVerified, setOtpVerified] = useState(Boolean(savedSession.otpVerified));
   const [otpTimer, setOtpTimer] = useState(Number(savedSession.otpTimer || 30));
+  const [credentialType, setCredentialType] = useState("password");
+  const [credential, setCredential] = useState("");
+  const [credentialConfirmation, setCredentialConfirmation] = useState("");
 
   const [panVerified, setPanVerified] =
     useState(Boolean(savedSession.panVerified));
@@ -2632,11 +2720,13 @@ function OpenAccount() {
   const [ekycStartedForPan, setEkycStartedForPan] = useState(savedSession.ekycStartedForPan || "");
   const [ekycVerificationUrl, setEkycVerificationUrl] = useState(savedSession.ekycVerificationUrl || "");
   const [ekycLastRequestedAt, setEkycLastRequestedAt] = useState(Number(savedSession.ekycLastRequestedAt || 0));
+  const [kycPolling, setKycPolling] = useState(false);
 
   const [applicationId, setApplicationId] =
     useState(savedSession.applicationId || "");
 
   const pageTopRef = useRef(null);
+  const submitApplicationRef = useRef(null);
 
   const [form, setForm] = useState(() => {
     const savedForm = savedSession.form || {};
@@ -2711,6 +2801,77 @@ function OpenAccount() {
     }
   }, [success]);
 
+  useEffect(() => {
+    const pan = String(form.pan || "").trim().toUpperCase();
+    const isPendingEkyc = Boolean(
+      ekycStartedForPan &&
+      pan &&
+      ekycStartedForPan === pan &&
+      !panVerified
+    );
+
+    if (!isPendingEkyc || step !== 7) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const pollKycStatus = async () => {
+      if (cancelled) {
+        return;
+      }
+
+      setKycPolling(true);
+
+      try {
+        const response = await api.post("/auth/check-kyc-status", { pan: ekycStartedForPan });
+        const kycResult = response.data?.data || {};
+        const statusText = String(kycResult.kycStatus || kycResult.status || "").toLowerCase();
+        const verified = kycResult.verified === true;
+
+        if (verified) {
+          setPanVerified(true);
+          setPanChecked(true);
+          update("kycStatus", kycResult.kycStatus || "Verified");
+          update("panStatusRemark", kycResult.statusRemark || "KYC verified");
+
+          submitApplicationRef.current?.();
+          return;
+        }
+
+        const failed = ["failed", "rejected", "declined", "not verified", "not_verified"].some((value) =>
+          statusText.includes(value)
+        );
+
+        if (failed) {
+          setPanVerified(false);
+          setPanChecked(false);
+          update("kycStatus", "Not Verified");
+          update("panStatusRemark", kycResult.statusRemark || "Aadhaar eKYC failed. Please retry or choose another verification method.");
+          return;
+        }
+
+        update("kycStatus", kycResult.kycStatus || "Aadhaar eKYC pending");
+        update("panStatusRemark", kycResult.statusRemark || "Aadhaar eKYC is still pending. Complete the verification link and wait for confirmation.");
+      } catch (error) {
+        update("panStatusRemark", "Unable to confirm Aadhaar eKYC status right now. We will retry automatically.");
+      } finally {
+        if (!cancelled) {
+          setKycPolling(false);
+        }
+      }
+    };
+
+    pollKycStatus();
+    const timer = window.setInterval(pollKycStatus, 10000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      setKycPolling(false);
+    };
+  }, [ekycStartedForPan, form.pan, panVerified, step, update]);
+
   const sendOtp = async () => {
     if (!/^[0-9]{10}$/.test(form.mobile)) {
       window.alert("Enter a valid 10-digit mobile number.");
@@ -2771,14 +2932,31 @@ function OpenAccount() {
       window.alert("Enter the 6-digit OTP.");
       return;
     }
+    const validCredential = credentialType === "pin"
+      ? /^\d{6}$/.test(credential)
+      : /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/.test(credential);
+    if (!validCredential) {
+      window.alert(credentialType === "pin"
+        ? "Set a 6-digit PIN."
+        : "Set a password with at least 8 characters, including uppercase, lowercase, and a number.");
+      return;
+    }
+    if (credential !== credentialConfirmation) {
+      window.alert("Your password or PIN confirmation does not match.");
+      return;
+    }
 
     setLoading(true);
     try {
-      await api.post("/auth/verify-otp", buildOtpPayload({
-        phone: form.mobile,
-        email: form.email,
-        otp: form.otp,
-      }));
+      await api.post("/auth/verify-otp", {
+        ...buildOtpPayload({
+          phone: form.mobile,
+          email: form.email,
+          otp: form.otp,
+        }),
+        credentialType,
+        credential,
+      });
       setOtpVerified(true);
       sessionStorage.removeItem(SIGNUP_OTP_LOCK_KEY);
       setStep(2);
@@ -2818,6 +2996,8 @@ function OpenAccount() {
       otp: "",
     }));
     setOtpVerified(false);
+    setCredential("");
+    setCredentialConfirmation("");
   }, []);
 
   const verifyPan = async () => {
@@ -3288,47 +3468,46 @@ function OpenAccount() {
     setLoading(true);
     try {
       const pan = String(form.pan || "").trim().toUpperCase();
-      let kycVerifiedForSubmission = panVerified;
+      let kycVerifiedForSubmission = false;
 
-      if (!kycVerifiedForSubmission) {
-        const kycResponse = await api.post("/auth/check-kyc-status", { pan });
-        const kycResult = kycResponse.data?.data || {};
-        kycVerifiedForSubmission = Boolean(kycResult.verified);
+      const kycResponse = await api.post("/auth/check-kyc-status", { pan });
+      const kycResult = kycResponse.data?.data || {};
+      kycVerifiedForSubmission = kycResult.verified === true;
 
-        if (kycVerifiedForSubmission) {
+      if (kycVerifiedForSubmission) {
+        setPanVerified(true);
+        setPanChecked(true);
+        update("kycStatus", kycResult.kycStatus || "Verified");
+        update("panStatusRemark", kycResult.statusRemark || "KYC verified");
+      } else {
+        if (form.kycType !== "Aadhaar e-KYC") {
+          window.alert(`KYC is not verified. Complete the selected ${form.kycType || "KYC"} verification before submitting.`);
+          return;
+        }
+
+        const isRetry = ekycStartedForPan === pan;
+        const retryCooldownMs = 30 * 1000;
+        const retryWaitMs = retryCooldownMs - (Date.now() - ekycLastRequestedAt);
+        if (isRetry && ekycLastRequestedAt && retryWaitMs > 0) {
+          update("kycStatus", kycResult.kycStatus || "Aadhaar eKYC pending");
+          update("panStatusRemark", "Your earlier Aadhaar eKYC request is still pending. Complete the link below; you can request a fresh link shortly if needed.");
+          window.alert(`Aadhaar eKYC is still pending. Complete the current link or wait ${Math.ceil(retryWaitMs / 1000)} seconds before requesting a new one.`);
+          return;
+        }
+
+        const ekycResponse = await api.post("/auth/init-ekyc", {
+          pan,
+          mobile: form.mobile,
+          email: form.email,
+        });
+        const ekycData = ekycResponse.data?.data || {};
+        if (ekycData.alreadyVerified || ekycData.verified) {
+          kycVerifiedForSubmission = true;
           setPanVerified(true);
           setPanChecked(true);
-          update("kycStatus", kycResult.kycStatus || "Verified");
-          update("panStatusRemark", kycResult.statusRemark || "KYC verified");
+          update("kycStatus", ekycData.kycStatus || "Verified");
+          update("panStatusRemark", ekycData.statusRemark || "KYC verified");
         } else {
-          if (form.kycType !== "Aadhaar e-KYC") {
-            window.alert(`KYC is not verified. Complete the selected ${form.kycType || "KYC"} verification before submitting.`);
-            return;
-          }
-
-          const isRetry = ekycStartedForPan === pan;
-          const retryCooldownMs = 30 * 1000;
-          const retryWaitMs = retryCooldownMs - (Date.now() - ekycLastRequestedAt);
-          if (isRetry && ekycLastRequestedAt && retryWaitMs > 0) {
-            update("kycStatus", kycResult.kycStatus || "Aadhaar eKYC pending");
-            update("panStatusRemark", "Your earlier Aadhaar eKYC request is still pending. Complete the link below; you can request a fresh link shortly if needed.");
-            window.alert(`Aadhaar eKYC is still pending. Complete the current link or wait ${Math.ceil(retryWaitMs / 1000)} seconds before requesting a new one.`);
-            return;
-          }
-
-          const ekycResponse = await api.post("/auth/init-ekyc", {
-            pan,
-            mobile: form.mobile,
-            email: form.email,
-          });
-          const ekycData = ekycResponse.data?.data || {};
-          if (ekycData.alreadyVerified || ekycData.verified) {
-            kycVerifiedForSubmission = true;
-            setPanVerified(true);
-            setPanChecked(true);
-            update("kycStatus", ekycData.kycStatus || "Verified");
-            update("panStatusRemark", ekycData.statusRemark || "KYC verified");
-          } else {
           const verificationUrl = ekycData.verificationUrl || ekycData.ekycLink || ekycData.link || "";
 
           setEkycStartedForPan(pan);
@@ -3342,7 +3521,6 @@ function OpenAccount() {
             ? "KYC is still unverified. A fresh Aadhaar eKYC request has been sent. Complete the latest link, then continue again."
             : "Aadhaar eKYC has been started. Complete it, then select Continue again to check your status.");
           return;
-          }
         }
       }
 
@@ -3359,8 +3537,15 @@ function OpenAccount() {
       setApplicationId(
         result.applicationId || result.application_id || result.reg_id || "PENDING"
       );
-      window.location.href = "/dashboard";
+      window.location.href = "/dashboard/explore";
     } catch (error) {
+      if (error.response?.data?.code === "KYC_NOT_VERIFIED") {
+        const kycResult = error.response.data?.data || {};
+        setPanVerified(false);
+        setPanChecked(false);
+        update("kycStatus", kycResult.kycStatus || "Not Verified");
+        update("panStatusRemark", kycResult.statusRemark || error.response.data.message);
+      }
       if (error.response?.data?.code === "ACCOUNT_EXISTS") {
         window.alert(error.response.data.message || "This account already exists. Please sign in.");
         window.location.href = "/login";
@@ -3373,6 +3558,7 @@ function OpenAccount() {
       setLoading(false);
     }
   };
+  submitApplicationRef.current = submitApplication;
 
   /* =======================================================
      SUCCESS
@@ -3485,11 +3671,41 @@ function OpenAccount() {
               DHANVO
             </div>
 
+            <span className="sidebar-eyebrow">
+              TRUST · TECHNOLOGY · TRANSPARENCY
+            </span>
+
+            <h1 className="sidebar-headline">
+              Create your Dhanvo account.
+            </h1>
+
             <p>
-              Empowering your wealth with
-              Trust, Technology &
-              Transparency.
+              Set up your profile once and start investment journey with DHANVO.
             </p>
+          </div>
+
+          <div className="sidebar-benefits">
+            <div className="sidebar-benefit">
+              <span className="benefit-check">✓</span>
+              <div>
+                <strong><b>Trust -</b> Regulated &amp; 100% Secure</strong>
+                <p>Your data and investments are fully secure and protected under strict regulatory standards.</p>
+              </div>
+            </div>
+            <div className="sidebar-benefit">
+              <span className="benefit-check">✓</span>
+              <div>
+                <strong><b>Technology -</b> Fast, Paperless &amp; Smart Setup</strong>
+                <p>Automated KYC, instant verification, and a seamless digital experience with zero paperwork.</p>
+              </div>
+            </div>
+            <div className="sidebar-benefit">
+              <span className="benefit-check">✓</span>
+              <div>
+                <strong><b>Transparency -</b> Zero Hidden Charges, Pure Clarity</strong>
+                <p>Complete clarity at every step—no hidden terms, just an honest and straightforward platform.</p>
+              </div>
+            </div>
           </div>
 
           <div className="sidebar-progress">
@@ -3557,14 +3773,8 @@ function OpenAccount() {
           </div>
 
           <div className="sidebar-footer">
-            <span>
-              <LockKeyhole size={13} />
-              Secure Account Opening
-            </span>
-
-            <small>
-              www.dhanvo.in
-            </small>
+            <strong>Dhanlakshya Securities Private Limited</strong>
+            <p>DHANVO | Empowering your wealth with trust, technology, and transparency.</p>
           </div>
         </aside>
 
@@ -3607,6 +3817,30 @@ function OpenAccount() {
             </span>
           </div>
 
+          <div className="mobile-intro">
+            <span className="mobile-eyebrow">
+              TRUST · TECHNOLOGY · TRANSPARENCY
+            </span>
+            <h1>Create your Dhanvo account.</h1>
+            <p>
+              Open your account with confidence: regulated security, paperless verification, and clear terms with no hidden charges.
+            </p>
+            <div className="mobile-values">
+              <span>Trust</span>
+              <span>Technology</span>
+              <span>Transparency</span>
+            </div>
+            <div className="mobile-trust-copy">
+              <p><strong>Trust</strong> — Regulated security protects your data and investments.</p>
+              <p><strong>Technology</strong> — Paperless KYC and fast digital verification.</p>
+              <p><strong>Transparency</strong> — Clear terms, with no hidden charges.</p>
+            </div>
+            <span>
+              <LockKeyhole size={13} />
+              Secure Account Opening
+            </span>
+          </div>
+
           <div className="mobile-progress">
             <motion.div
               animate={{
@@ -3618,26 +3852,41 @@ function OpenAccount() {
           </div>
 
           <div className="content-wrapper">
+            <div className="signup-topbar">
+              <span>Step {step} of {STEPS.length}</span>
+              <span className="onboarding-secure">
+                <LockKeyhole size={16} />
+                Secure onboarding
+              </span>
+            </div>
+
+            <div className="signup-step-track" aria-label={`Step ${step} of ${STEPS.length}`}>
+              {STEPS.map((item) => (
+                <span
+                  key={item.id}
+                  className={`signup-step-segment ${
+                    step === item.id ? "current" : step > item.id ? "done" : ""
+                  }`}
+                />
+              ))}
+            </div>
+
             <header className="page-header">
               <div>
-                <span className="eyebrow">
-                  DHANVO ACCOUNT OPENING
-                </span>
-
                 <div className="heading-row">
                   <CurrentIcon
                     size={20}
                   />
 
                   <h1>
-                    {STEPS[step - 1].name}
+                    {step === 1 ? "Verify mobile & email" : STEPS[step - 1].name}
                   </h1>
                 </div>
 
                 <p>
-                  Complete your account
-                  opening journey with a
-                  simple digital process.
+                  {step === 1
+                    ? "Enter your mobile number and email. We'll send one OTP to verify both."
+                    : "Complete your account opening journey with a simple digital process."}
                 </p>
               </div>
 
@@ -3669,6 +3918,7 @@ function OpenAccount() {
 
             <AnimatePresence mode="wait">
               <motion.div
+                className={`step-view ${step === 1 ? "step-one" : ""}`}
                 key={step}
                 initial={{
                   opacity: 0,
@@ -3691,6 +3941,12 @@ function OpenAccount() {
                     form={form}
                     update={update}
                     onIdentityChange={updateIdentity}
+                    credentialType={credentialType}
+                    setCredentialType={setCredentialType}
+                    credential={credential}
+                    setCredential={setCredential}
+                    credentialConfirmation={credentialConfirmation}
+                    setCredentialConfirmation={setCredentialConfirmation}
                     otpSent={otpSent}
                     otpVerified={otpVerified}
                     otpTimer={otpTimer}
@@ -3763,6 +4019,7 @@ function OpenAccount() {
                     panVerified={panVerified}
                     ekycStartedForPan={ekycStartedForPan}
                     ekycVerificationUrl={ekycVerificationUrl}
+                    kycPolling={kycPolling}
                   />
                 )}
               </motion.div>
@@ -3771,7 +4028,9 @@ function OpenAccount() {
             {/* NORMAL NAVIGATION FOR STEPS 1-6 */}
 
             {step < STEPS.length && (
-              <div className="navigation">
+              <div className={`navigation ${
+                step === 1 && !otpVerified ? "step-one-navigation" : ""
+              }`}>
                 <button
                   type="button"
                   className="back-button"
@@ -3813,17 +4072,29 @@ function OpenAccount() {
               </div>
             )}
 
+            <div className="signup-login">
+              Already have an account?
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.href = "/login";
+                }}
+              >
+                Log in
+              </button>
+            </div>
+
             {/* STEP 7 HAS ONLY VERIFY & CONTINUE
                 INSIDE THE STEP */}
 
             <footer className="footer">
               <span>
-                � {new Date().getFullYear()}{" "}
+                © {new Date().getFullYear()}{" "}
                 DHANVO
               </span>
 
               <strong>
-                Trust � Technology �
+                Trust · Technology ·
                 Transparency
               </strong>
 
@@ -3858,7 +4129,8 @@ body,
 
 body {
   font-family:
-    Inter,
+    "Manrope",
+    "Inter",
     Arial,
     Helvetica,
     sans-serif;
@@ -3892,14 +4164,12 @@ button:disabled {
 ========================================================= */
 
 .sidebar {
-  position: fixed;
+  position: relative;
   z-index: 50;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  width: 300px;
-  padding: 72px 24px 22px;
-  background: #071321;
+  width: 36%;
+  min-height: 100vh;
+  padding: 44px 40px 24px;
+  background: radial-gradient(circle at 82% 15%, #17334F 0%, #071321 52%, #081420 100%);
   color: #FFFFFF;
   display: flex;
   flex-direction: column;
@@ -3911,63 +4181,71 @@ button:disabled {
   left: 24px;
   height: 32px;
   padding: 0 10px;
-  border: 1px solid rgba(200,151,74,.3);
+  border: 1px solid rgba(216,179,107,.5);
   border-radius: 7px;
   background: rgba(200,151,74,.04);
   color: rgba(255,255,255,.72);
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
 }
 
 .back-to-dhanvo:hover {
-  color: #C8974A;
+  color: #E7C98C;
   border-color: #C8974A;
 }
 
 .brand {
-  color: #C8974A !important;
+  color: #E7C98C !important;
   font-family:
+    "Fraunces",
     Georgia,
     "Times New Roman",
     serif;
   font-weight: 700;
-  letter-spacing: 3px;
+  letter-spacing: 0.5px;
   line-height: 1;
+  text-transform: uppercase;
 }
 
 .sidebar-brand {
+  margin-top: 24px;
   padding: 4px 7px 23px;
   border-bottom: 1px solid rgba(255,255,255,.1);
 }
 
 .sidebar-brand .brand {
-  font-size: 31px;
+  font-size: 26px;
+  letter-spacing: 1px;
 }
 
 .sidebar-brand p {
-  max-width: 220px;
-  margin: 11px 0 0;
-  color: rgba(255,255,255,.55);
-  font-size: 10px;
+  max-width: 235px;
+  margin: 12px 0 0;
+  color: rgba(255,255,255,.65);
+  font-size: 12px;
   line-height: 1.6;
 }
 
 .sidebar-progress {
   position: relative;
   flex: 1;
+  min-height: 0;
   padding-top: 23px;
-  overflow: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .progress-header {
   display: flex;
   justify-content: space-between;
   margin: 0 6px 15px;
-  color: rgba(255,255,255,.5);
-  font-size: 9px;
+  color: rgba(255,255,255,.55);
+  font-size: 10px;
   text-transform: uppercase;
   letter-spacing: .8px;
 }
@@ -3982,7 +4260,7 @@ button:disabled {
   top: 70px;
   bottom: 12px;
   width: 1px;
-  background: rgba(255,255,255,.11);
+  background: rgba(255,255,255,.12);
 }
 
 .vertical-progress > div {
@@ -3999,7 +4277,7 @@ button:disabled {
   border: 0;
   border-radius: 9px;
   background: transparent;
-  color: rgba(255,255,255,.42);
+  color: rgba(255,255,255,.45);
   display: flex;
   align-items: center;
   gap: 9px;
@@ -4025,7 +4303,7 @@ button:disabled {
   width: 27px;
   min-width: 27px;
   height: 27px;
-  border: 1px solid rgba(255,255,255,.18);
+  border: 1px solid rgba(255,255,255,.2);
   border-radius: 50%;
   background: #071321;
   display: flex;
@@ -4054,8 +4332,8 @@ button:disabled {
 .sidebar-footer {
   padding: 15px 6px 0;
   border-top: 1px solid rgba(255,255,255,.1);
-  color: rgba(255,255,255,.4);
-  font-size: 8.5px;
+  color: rgba(255,255,255,.52);
+  font-size: 9px;
 }
 
 .sidebar-footer span {
@@ -4078,15 +4356,16 @@ button:disabled {
 ========================================================= */
 
 .main-content {
-  width: calc(100% - 300px);
+  width: 64%;
   min-height: 100vh;
-  margin-left: 300px;
+  margin-left: 0;
+  background: #FFFFFF;
 }
 
 .content-wrapper {
-  width: min(1120px, calc(100% - 70px));
+  width: min(560px, calc(100% - 72px));
   margin: 0 auto;
-  padding: 55px 0 30px;
+  padding: 48px 0 30px;
 }
 
 .page-header {
@@ -4118,17 +4397,19 @@ button:disabled {
 .heading-row h1 {
   margin: 0;
   font-family:
+    "Fraunces",
     Georgia,
     "Times New Roman",
     serif;
-  font-size: 36px;
+  font-size: 34px;
   line-height: 1.15;
+  letter-spacing: -0.6px;
 }
 
 .page-header p {
   margin: 8px 0 0;
-  color: #657388;
-  font-size: 11px;
+  color: #64748B;
+  font-size: 13px;
   line-height: 1.6;
 }
 
@@ -4160,7 +4441,7 @@ button:disabled {
 
 .signin-area span {
   color: #7A8798;
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .signin-area button {
@@ -4170,7 +4451,7 @@ button:disabled {
   border: 0;
   background: transparent;
   color: #C8974A;
-  font-size: 9.5px;
+  font-size: 10px;
   font-weight: 800;
 }
 
@@ -4185,11 +4466,10 @@ button:disabled {
 }
 
 .card {
-  border: 1px solid #E3E7EB;
+  border: 1px solid rgba(10,25,41,.1);
   border-radius: 14px;
   background: #FFFFFF;
-  box-shadow:
-    0 8px 28px rgba(7,19,33,.045);
+  box-shadow: 0 8px 28px rgba(7,19,33,.04);
   overflow: visible;
 }
 
@@ -4236,8 +4516,7 @@ button:disabled {
 
 .grid {
   display: grid;
-  grid-template-columns:
-    repeat(2, minmax(0,1fr));
+  grid-template-columns: repeat(2, minmax(0,1fr));
   gap: 15px;
 }
 
@@ -4255,7 +4534,7 @@ button:disabled {
 .field select {
   width: 100%;
   height: 46px;
-  border: 1px solid #DCE2E9;
+  border: 1px solid rgba(10,25,41,.1);
   border-radius: 9px;
   background: #FFFFFF;
   color: #071321;
@@ -4272,8 +4551,7 @@ button:disabled {
 .field select:focus,
 .mobile-input:focus-within {
   border-color: #C8974A;
-  box-shadow:
-    0 0 0 3px rgba(200,151,74,.08);
+  box-shadow: 0 0 0 3px rgba(200,151,74,.08);
 }
 
 .info {
@@ -4308,8 +4586,7 @@ button:disabled {
   gap: 7px;
   font-size: 10px;
   font-weight: 800;
-  box-shadow:
-    0 6px 16px rgba(200,151,74,.15);
+  box-shadow: 0 6px 16px rgba(200,151,74,.15);
 }
 
 .primary-button:hover {
@@ -4440,6 +4717,68 @@ button:disabled {
     minmax(0,1fr);
   gap: 15px;
   align-items: end;
+}
+
+.signup-credential-panel {
+  grid-column: 1 / -1;
+  padding: 16px;
+  border: 1px solid rgba(201,151,74,.25);
+  border-radius: 10px;
+  background: #FFFCF6;
+}
+
+.signup-credential-panel > div:first-child strong,
+.signup-credential-panel > div:first-child span {
+  display: block;
+}
+
+.signup-credential-panel > div:first-child strong {
+  color: var(--dh-ink);
+  font-size: 12px;
+}
+
+.signup-credential-panel > div:first-child span {
+  margin-top: 4px;
+  color: var(--dh-mist);
+  font-size: 10px;
+}
+
+.signup-credential-options {
+  display: flex;
+  gap: 8px;
+  margin: 13px 0;
+}
+
+.signup-credential-options button {
+  padding: 8px 13px;
+  border: 1px solid var(--dh-line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--dh-slate);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.signup-credential-options button.active {
+  border-color: var(--dh-gold);
+  background: rgba(201,151,74,.1);
+  color: var(--dh-ink);
+}
+
+.signup-credential-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0,1fr));
+  gap: 14px;
+}
+
+.signup-credential-fields .field {
+  margin-bottom: 0;
+}
+
+.signup-credential-hint {
+  margin: 8px 0 0;
+  color: var(--dh-mist);
+  font-size: 9px;
 }
 
 .resend-box {
@@ -5439,7 +5778,8 @@ button:disabled {
 
 .mobile-top,
 .mobile-brand-row,
-.mobile-progress {
+.mobile-progress,
+.mobile-intro {
   display: none;
 }
 
@@ -5691,6 +6031,33 @@ button:disabled {
     background: #C8974A;
   }
 
+  .mobile-intro {
+    display: block;
+    padding: 11px 15px 10px;
+    background: #0B1A2B;
+    color: rgba(255,255,255,.72);
+  }
+
+  .mobile-intro p {
+    margin: 0;
+  }
+
+  .mobile-values {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+
+  .mobile-values span {
+    padding: 4px 7px;
+    border: 1px solid rgba(200,151,74,.22);
+    border-radius: 999px;
+    color: #E0B968;
+    font-size: 8px;
+    font-weight: 700;
+  }
+
   .content-wrapper {
     width: calc(100% - 24px);
     padding: 25px 0;
@@ -5723,6 +6090,14 @@ button:disabled {
   .account-type-grid,
   .otp-grid,
   .review-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .signup-credential-panel {
+    grid-column: auto;
+  }
+
+  .signup-credential-fields {
     grid-template-columns: 1fr;
   }
 
@@ -5849,24 +6224,112 @@ button:disabled {
 html,body,#root{background:var(--dh-paper)}
 body{font-family:'Manrope',system-ui,sans-serif;color:var(--dh-ink);background:var(--dh-paper)}
 .open-account-page{min-height:100vh;background:var(--dh-paper);color:var(--dh-ink)}
-.sidebar{width:292px;padding:78px 22px 22px;background:radial-gradient(circle at 75% 10%,#17334F 0%,var(--dh-ink) 48%,#081420 100%);border-right:1px solid rgba(231,201,140,.12)}
+.sidebar{width:36%;flex:0 0 36%;padding:78px 22px 22px;background:radial-gradient(circle at 75% 10%,#17334F 0%,var(--dh-ink) 48%,#081420 100%);border-right:1px solid rgba(231,201,140,.12)}
 .back-to-dhanvo{top:20px;left:22px;height:34px;padding:0 12px;border:1px solid rgba(231,201,140,.25);border-radius:999px;background:rgba(15,35,56,.72);color:rgba(251,249,244,.78);font-size:10px}.back-to-dhanvo:hover{color:var(--dh-gold-soft);border-color:var(--dh-gold)}
 .brand{color:var(--dh-gold)!important;font-family:'Fraunces',Georgia,serif;letter-spacing:3px;font-weight:700}.sidebar-brand{padding:4px 8px 24px;border-bottom-color:rgba(231,201,140,.14)}.sidebar-brand .brand{font-size:32px}.sidebar-brand p{max-width:225px;margin-top:12px;color:var(--dh-mist);font-size:10.5px;line-height:1.65}
 .progress-header{color:rgba(251,249,244,.55);font-size:9.5px}.progress-header strong{color:var(--dh-gold-soft)}.vertical-progress{background:rgba(159,179,200,.16)}.vertical-progress>div{background:var(--dh-gold)}
 .sidebar-step{min-height:52px;margin-bottom:4px;padding:5px 8px;border-radius:12px;color:rgba(251,249,244,.45);gap:10px}.sidebar-step:hover{background:rgba(231,201,140,.07)}.sidebar-step.active{background:rgba(231,201,140,.11);color:var(--dh-paper);box-shadow:inset 0 0 0 1px rgba(231,201,140,.10)}.sidebar-step.completed{color:rgba(251,249,244,.76)}.step-circle{width:29px;min-width:29px;height:29px;border-color:rgba(251,249,244,.20);background:var(--dh-ink)}.sidebar-step.active .step-circle{background:var(--dh-gold);border-color:var(--dh-gold)}.sidebar-step.completed .step-circle{background:var(--dh-gold-soft);border-color:var(--dh-gold-soft)}.sidebar-step>span:last-child{font-size:10.5px;font-weight:600}.sidebar-footer{border-top-color:rgba(231,201,140,.14);color:rgba(251,249,244,.42)}.sidebar-footer svg{color:var(--dh-gold)}
-.main-content{width:calc(100% - 292px);margin-left:292px}.content-wrapper{width:min(1120px,calc(100% - 48px));padding:64px 0 38px}
+.main-content{flex:1 1 68%;width:68%;min-width:0;margin-left:0}.content-wrapper{width:min(1280px,calc(100% - 20px));padding:64px 0 38px}
 .page-header{margin-bottom:34px;gap:36px}.eyebrow{color:var(--dh-teal);font-size:10px;letter-spacing:.12em;font-weight:800}.heading-row{gap:11px;margin-top:10px}.heading-row svg{color:var(--dh-gold)}.heading-row h1{font-family:'Fraunces',Georgia,serif;font-size:clamp(2rem,3.2vw,2.65rem);line-height:1.1;font-weight:600;letter-spacing:-.015em}.page-header p{color:var(--dh-slate);font-size:13.5px;line-height:1.65}.secure-pill{padding:7px 12px;border:1px solid rgba(29,111,100,.12);border-radius:999px;background:rgba(29,111,100,.07);color:var(--dh-teal);font-size:10px}.signin-area span{color:#7A8798;font-size:10px}.signin-area button{color:var(--dh-gold);font-size:10.5px}
 .stack{gap:18px}.card{border:1px solid var(--dh-line);border-radius:18px;background:#fff;box-shadow:0 16px 36px -24px rgba(10,25,41,.28)}.card-head{padding:20px 22px;border-bottom:1px solid var(--dh-line)}.section-title{gap:12px}.section-icon{width:40px;height:40px;border-radius:11px;background:rgba(201,151,74,.09);color:var(--dh-gold)}.card-head h3{font-size:14px;font-weight:800}.card-head p{color:#7A8798;font-size:10px}.card-body{padding:22px}
 .field label,.send-otp-container label,.verify-pan label{color:#354354;font-size:10px;font-weight:800}.field input,.field select{height:48px;border:1px solid #DCE2E9;border-radius:10px;background:#fff;color:var(--dh-ink);font-size:12.5px;transition:border-color .15s ease,box-shadow .15s ease}.field input:focus,.field select:focus,.mobile-input:focus-within{border-color:var(--dh-gold);box-shadow:0 0 0 3px rgba(201,151,74,.10)}.field input::placeholder{color:#A5AFBB}
-.primary-button{min-height:48px;padding:0 20px;border-radius:999px;background:var(--dh-gold);color:var(--dh-ink);font-size:10.5px;box-shadow:0 8px 20px -8px rgba(201,151,74,.55)}.primary-button:hover{background:var(--dh-gold-soft);transform:translateY(-1px)}.outline-button{height:48px;border-radius:999px;border-color:rgba(201,151,74,.45);background:#fff;font-size:10px}.outline-button:hover{background:rgba(201,151,74,.06);border-color:var(--dh-gold)}.back-button{min-height:46px;border-radius:999px;background:transparent;font-size:10px}.back-button:hover{border-color:var(--dh-gold);color:var(--dh-gold)}
+.primary-button{min-height:48px;padding:0 20px;border-radius:999px;background:var(--dh-gold);color:var(--dh-ink);font-size:10.5px;box-shadow:0 8px 20px -8px rgba(201,151,74,.55)}.primary-button:hover{background:var(--dh-gold-soft);transform:translateY(-1px)}.outline-button{height:48px;border-radius:999px;border-color:rgba(201,151,74,.45);background:#fff;font-size:10px}.outline-button:hover{background:rgba(201,151,74,.06);border-color:var(--dh-gold)}.send-otp-container .send-otp-button{border:1px solid var(--dh-gold);background:var(--dh-gold);color:var(--dh-ink);font-weight:800;box-shadow:0 8px 20px -8px rgba(201,151,74,.55)}.send-otp-container .send-otp-button:hover{border-color:var(--dh-gold-soft);background:var(--dh-gold-soft)}.back-button{min-height:46px;border-radius:999px;background:transparent;font-size:10px}.back-button:hover{border-color:var(--dh-gold);color:var(--dh-gold)}
 .info{border-color:rgba(201,151,74,.18);border-radius:11px;background:rgba(201,151,74,.045);color:var(--dh-slate);font-size:10px}.info svg{color:var(--dh-gold)}.sub-heading{font-size:11px;border-bottom-color:var(--dh-line)}
 .radio-card{min-height:72px;border:1px solid #E0E5EA;border-radius:12px;background:#fff}.radio-card:hover,.radio-card.selected{border-color:var(--dh-gold)}.radio-card.selected{background:rgba(201,151,74,.045)}.radio.checked{border-color:var(--dh-gold)}.radio.checked span{background:var(--dh-gold)}.radio-content strong{font-size:11px}.radio-content small{font-size:9px}.account-selector{min-height:62px;border-color:var(--dh-gold);border-radius:12px;background:rgba(201,151,74,.045)}.selector-arrow{color:var(--dh-gold)}.selected-kyc{min-height:68px;border-color:rgba(201,151,74,.38);border-radius:12px;background:rgba(201,151,74,.045)}.default-pill{background:var(--dh-gold)}
 .holder-box,.bank-box{border-color:#E3E7EB;border-radius:12px;background:#FCFDFC}.add-button{min-height:42px;border-radius:999px;background:var(--dh-ink);font-size:9.5px}.add-button:hover{background:var(--dh-ink-2)}.upload-box{border-radius:12px;background:#FCFDFC}.upload-icon{border-radius:10px;color:var(--dh-gold)}.upload-button{border-radius:999px}.upload-button:hover{border-color:var(--dh-gold)}
 .primary-badge{background:rgba(29,111,100,.08);color:var(--dh-teal)}.allocation-top strong,.auth-options button.auth-active{color:var(--dh-gold)}.allocation-track>div{background:var(--dh-gold)}.auth-options{background:#F2F4F6;border-radius:999px}.auth-options button{border-radius:999px}.auth-options button.auth-active{background:#fff}
 .final-verification{border:1px solid rgba(201,151,74,.18);border-radius:16px;background:linear-gradient(135deg,rgba(201,151,74,.055),rgba(29,111,100,.025))}.final-icon{border-radius:12px;background:rgba(201,151,74,.10);color:var(--dh-gold)}.final-copy strong{font-size:12px}.final-copy span,.final-copy p{font-size:9px;color:var(--dh-slate)}.navigation{margin-top:22px}.footer{border-top-color:var(--dh-line);font-size:8.5px}.footer strong{color:var(--dh-gold)}
 .success-page{background:radial-gradient(circle at 78% 15%,#17334F 0%,var(--dh-ink) 55%,#081420 100%)}.success-card{border:1px solid rgba(231,201,140,.18);border-radius:22px;box-shadow:0 28px 70px -35px rgba(0,0,0,.7)}.success-logo{color:var(--dh-gold)!important;font-family:'Fraunces',Georgia,serif}.success-icon{background:rgba(29,111,100,.08);color:var(--dh-teal)}.success-label{background:rgba(29,111,100,.07);color:var(--dh-teal)}.success-card h1{font-family:'Fraunces',Georgia,serif;font-weight:600}.application-id{border-color:#EDE4D4;border-radius:12px;background:var(--dh-paper)}.application-id strong{color:var(--dh-gold)}
-@media(max-width:1100px){.sidebar{width:260px}.main-content{width:calc(100% - 260px);margin-left:260px}}
-@media(max-width:800px){.main-content{width:100%;margin-left:0}.mobile-top,.mobile-brand-row{background:var(--dh-ink)}.mobile-top button{border-radius:999px}.mobile-brand-row .brand{font-family:'Fraunces',Georgia,serif}.content-wrapper{width:calc(100% - 30px);padding-top:30px}.heading-row h1{font-size:30px}.card{border-radius:16px}.card-head,.card-body{padding:17px}.navigation{background:rgba(251,249,244,.94);border-top:1px solid rgba(10,25,41,.08)}}
+@media(max-width:1100px){.sidebar{width:32%;flex-basis:32%}.main-content{width:68%;margin-left:0}}
+@media(max-width:800px){.main-content{width:100%;margin-left:0}.mobile-top,.mobile-brand-row{background:var(--dh-ink)}.mobile-top button{border-radius:999px}.mobile-brand-row .brand{font-family:'Fraunces',Georgia,serif}.mobile-intro{padding:0 15px 13px;background:var(--dh-ink);color:var(--dh-mist)}.mobile-intro p{max-width:440px;margin:0 0 9px;font-size:11px;line-height:1.55}.mobile-intro span{display:flex;align-items:center;gap:6px;color:var(--dh-gold-soft);font-size:9px;font-weight:700;letter-spacing:.04em}.content-wrapper{width:calc(100% - 30px);padding-top:30px}.heading-row h1{font-size:30px}.card{border-radius:16px}.card-head,.card-body{padding:17px}.navigation{background:rgba(251,249,244,.94);border-top:1px solid rgba(10,25,41,.08)}}
+
+/* Reference-matched split signup composition */
+.open-account-page{display:flex;gap:0}
+.sidebar{box-sizing:border-box;position:sticky;top:0;width:36%;height:100vh;min-height:100vh;flex:0 0 36%;padding:44px 40px 24px}
+.back-to-dhanvo{display:none}
+.sidebar-brand{margin:0;padding:0;border:0}
+.sidebar-brand .brand{font-size:26px;letter-spacing:.5px}
+.sidebar-eyebrow{display:block;margin-top:40px;color:var(--dh-gold-soft);font-size:11px;font-weight:700;letter-spacing:1.6px}
+.sidebar-headline{max-width:420px;margin:13px 0 14px;color:#fff;font-family:'Fraunces',Georgia,serif;font-size:36px;font-weight:600;line-height:1.12;letter-spacing:-1.2px}
+.sidebar-brand p{max-width:400px;margin:0;color:#CBD5DF;font-size:13.5px;line-height:1.65}
+.sidebar-benefits{display:grid;gap:14px;margin-top:32px}
+.sidebar-benefit{display:flex;align-items:flex-start;gap:11px}
+.benefit-check{width:21px;height:21px;flex:0 0 21px;border:1px solid rgba(216,179,107,.5);border-radius:50%;display:grid;place-items:center;color:var(--dh-gold-soft);font-size:11px}
+.sidebar-benefit strong{display:block;color:#fff;font-size:13px;font-weight:600;line-height:1.5}
+.sidebar-benefit strong b{color:var(--dh-gold-soft)}
+.sidebar-benefit p{margin:4px 0 0;color:#AEBBC8;font-size:12px;line-height:1.5}
+.sidebar-progress{display:none}
+.sidebar-footer{margin-top:auto;padding:24px 0 0;border:0;color:#8FA0B0;font-size:10.5px;line-height:1.6}
+.sidebar-footer strong{color:var(--dh-gold-soft)}
+.sidebar-footer p{margin:0;color:#8FA0B0;font-size:10.5px;line-height:1.6}
+.main-content{box-sizing:border-box;width:64%;flex:0 0 64%;min-width:0;margin-left:0;background:#fff}
+.content-wrapper{width:min(760px,calc(100% - 72px));padding:48px 0 30px}
+.signup-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:30px;color:var(--dh-mist);font-size:12px}
+.onboarding-secure{display:flex;align-items:center;gap:7px}
+.onboarding-secure svg{color:#AAB4BE}
+.signup-step-track{display:flex;gap:7px;margin-bottom:34px}
+.signup-step-segment{height:4px;flex:1;border-radius:10px;background:#E7E5DF}
+.signup-step-segment.current{background:var(--dh-gold)}
+.signup-step-segment.done{background:#79A893}
+.page-header{margin-bottom:28px;gap:20px}
+.page-header .eyebrow{display:none}
+.heading-row{margin:0}
+.heading-row svg{display:none}
+.heading-row h1{font-size:34px;line-height:1.15;letter-spacing:-.6px}
+.page-header p{margin:9px 0 0;color:var(--dh-slate);font-size:14px;line-height:1.65}
+.header-right{display:none}
+.step-one .card{overflow:visible;border:0;border-radius:0;background:transparent;box-shadow:none}
+.step-one .card-head{display:none}
+.step-one .card-body{padding:0}
+.step-one .verification-grid{grid-template-columns:1fr;gap:0;border-bottom:1px solid var(--dh-line);padding-bottom:20px}
+.step-one .field{margin-bottom:18px}
+.step-one .field label{margin-bottom:8px;color:var(--dh-ink);font-size:12px;font-weight:700}
+.step-one .field input,.step-one .mobile-input{height:49px;border-radius:8px}
+.step-one .mobile-input>span{min-width:49px;background:#F4F1E9;color:var(--dh-slate);font-size:13px}
+.step-one .mobile-input input{font-size:14px}
+.step-one .send-otp-container{display:flex;justify-content:flex-end;margin-top:2px}
+.step-one .send-otp-container label{display:none}
+.step-one .send-otp-button{width:150px;height:49px;border:1px solid var(--dh-gold);border-radius:8px;background:var(--dh-gold);color:var(--dh-ink);font-size:12.5px;font-weight:800;box-shadow:0 8px 20px -8px rgba(201,151,74,.55)}
+.step-one .send-otp-button:hover{border-color:var(--dh-gold-soft);background:var(--dh-gold-soft)}
+.step-one-navigation{display:none}
+.signup-login{margin-top:25px;text-align:center;color:var(--dh-mist);font-size:12px}
+.signup-login button{padding:0;border:0;background:transparent;color:var(--dh-gold);font-weight:700}
+.footer{display:none}
+@media(max-width:900px){
+  .sidebar{display:none}
+  .main-content{width:100%;flex-basis:100%}
+  .mobile-top{display:none}
+  .mobile-brand-row{min-height:0;display:flex;justify-content:flex-start;padding:26px 22px 0;background:var(--dh-ink)}
+  .mobile-brand-row .brand{font-size:26px;letter-spacing:.5px}
+  .mobile-brand-row>span{display:none}
+  .mobile-intro{display:block;padding:1px 22px 24px;background:var(--dh-ink);color:var(--dh-mist)}
+  .mobile-eyebrow{display:block!important;margin-top:24px;color:var(--dh-gold-soft)!important;font-size:10px!important;font-weight:700;letter-spacing:1.4px}
+  .mobile-intro h1{max-width:420px;margin:11px 0 10px;color:#fff;font-family:'Fraunces',Georgia,serif;font-size:30px;font-weight:600;line-height:1.12;letter-spacing:-.8px}
+  .mobile-intro p{max-width:500px;margin:0 0 14px;color:#CBD5DF;font-size:13px;line-height:1.65}
+  .mobile-intro .mobile-values{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
+  .mobile-intro .mobile-values span{display:inline-flex;padding:4px 7px;border:1px solid rgba(216,179,107,.35);border-radius:999px;color:var(--dh-gold-soft);font-size:8px;font-weight:700}
+  .mobile-trust-copy{display:grid;gap:5px;margin:0 0 14px}
+  .mobile-trust-copy p{margin:0;color:#AEBBC8;font-size:10px;line-height:1.5}
+  .mobile-trust-copy strong{color:var(--dh-gold-soft);font-weight:700}
+  .mobile-intro>span:last-child{display:flex;align-items:center;gap:6px;color:var(--dh-gold-soft);font-size:9px;font-weight:700}
+  .mobile-progress{display:none}
+  .content-wrapper{width:min(560px,calc(100% - 40px));padding:28px 0 36px}
+  .signup-topbar{margin-bottom:22px}
+  .signup-step-track{margin-bottom:27px}
+  .page-header{display:block;margin-bottom:24px}
+  .heading-row h1{font-size:30px}
+  .header-right{display:none}
+  .step-one .card-head,.step-one .card-body{padding:0}
+}
+@media(max-width:480px){
+  .mobile-brand-row{padding:23px 22px 0}
+  .mobile-intro{padding:1px 22px 22px}
+  .mobile-intro h1{font-size:27px}
+  .content-wrapper{width:calc(100% - 36px);padding-top:25px}
+  .signup-step-track{gap:5px}
+  .step-one .verification-grid{grid-template-columns:minmax(0,1fr)}
+  .step-one .send-otp-button{width:100%}
+}
 `;
 
 export default OpenAccount;

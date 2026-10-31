@@ -1,15 +1,14 @@
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
+import './config/loadEnv.js';
 import connectDB from './config/db.js';
 import authRoutes from './routes/authRoutes.js';
 import otpRoutes from './routes/otpRoutes.js';
 import panRoutes from './routes/panRoutes.js';
 import marketRoutes from './routes/marketRoutes.js';
+import mutualFundRoutes from './routes/mutualFundRoutes.js';
 import contactRoutes from './routes/contactRoutes.js';
-
-// Load env vars
-dotenv.config();
+import adminRoutes from './routes/adminRoutes.js';
 
 const app = express();
 
@@ -40,7 +39,9 @@ app.use('/api/auth', authRoutes);
 app.use('/api/auth', otpRoutes);
 app.use('/api/auth', panRoutes);
 app.use('/api/market', marketRoutes);
+app.use('/api/mutual-funds', mutualFundRoutes);
 app.use('/api/contact', contactRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

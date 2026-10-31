@@ -33,7 +33,7 @@ const PublicRoute = ({ children, allowAuthenticated = false }) => {
   const { isAuthenticated, loading } = useAuth();
 
   if (loading) return <LoadingScreen />;
-  if (isAuthenticated && !allowAuthenticated) return <Navigate to="/dashboard" replace />;
+  if (isAuthenticated && !allowAuthenticated) return <Navigate to="/dashboard/explore" replace />;
 
   return children;
 };
@@ -141,7 +141,7 @@ function App() {
         />
 
         <Route
-          path="/dashboard"
+          path="/dashboard/*"
           element={
             <ProtectedRoute>
               <Dashboard />

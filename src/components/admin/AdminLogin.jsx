@@ -1,40 +1,90 @@
 import { useState } from 'react';
-import { ArrowRight, LockKeyhole, ShieldCheck } from 'lucide-react';
-import { ADMIN_CREDENTIALS } from './adminData';
+import { ArrowRight, LockKeyhole, MoonStar, ShieldCheck, SunMedium } from 'lucide-react';
 
-const AdminLogin = ({ onSuccess }) => {
+const AdminLogin = ({ onSuccess, notice = '', theme = 'light', onToggleTheme }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
-  const submit = (event) => {
+  const submit = async (event) => {
     event.preventDefault();
-    if (email.trim().toLowerCase() !== ADMIN_CREDENTIALS.email || password !== ADMIN_CREDENTIALS.password) {
-      setError('Invalid admin credentials.');
-      return;
-    }
-
-    localStorage.setItem('dhanvo_admin_session', 'active');
     setError('');
-    onSuccess();
+    setSubmitting(true);
+    try {
+      await onSuccess(email.trim(), password);
+      setPassword('');
+    } catch (loginError) {
+      setError(loginError.response?.data?.message || loginError.message || 'Unable to sign in.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
-    <main className="min-h-screen bg-dark-950 flex items-center justify-center p-4 sm:p-6">
-      <div className="w-full max-w-md">
-        <div className="mb-8 flex items-center gap-3">
-          <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-500 to-yellow-300 flex items-center justify-center"><ShieldCheck className="w-6 h-6 text-dark-950" /></div>
-          <div><p className="text-white text-xl font-display font-bold">DHANVO / CONTROL</p><p className="text-dark-500 text-xs uppercase tracking-[0.2em]">Administrator access</p></div>
+    <main className="auth">
+      <div className="auth-l">
+        <a className="brand" href="#/login">
+          <span className="mark">D</span>
+          <span>
+            <b>Dhanvo</b>
+            <small>Admin Console</small>
+          </span>
+        </a>
+
+        <div>
+          <span className="eyebrow"><ShieldCheck className="h-4 w-4" /> Admin access</span>
+          <h1>Run Dhanvo with <span>clarity &amp; control.</span></h1>
+          <p>One console for clients, partners, mutual funds, unlisted shares, insurance, payouts and compliance — built for the leadership of Dhanlakshya Securities Pvt. Ltd.</p>
         </div>
 
-        <form onSubmit={submit} className="bg-dark-900/70 border border-dark-700/60 rounded-2xl p-6 sm:p-8 shadow-2xl shadow-black/20">
-          <div className="mb-7"><p className="text-primary-400 text-xs uppercase tracking-[0.18em] font-semibold">Secure workspace</p><h1 className="text-3xl text-white font-display font-bold mt-2">Admin sign in</h1><p className="text-dark-400 mt-2">Monitor onboarding, users and operations from one place.</p></div>
-          <label className="block mb-4"><span className="text-dark-300 text-sm">Email ID</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="admin@dhanvo.in" className="mt-2 w-full px-4 py-3 rounded-xl bg-dark-800/70 border border-dark-700 text-white outline-none focus:border-primary-500/60" autoComplete="username" /></label>
-          <label className="block mb-5"><span className="text-dark-300 text-sm">Password</span><div className="relative mt-2"><LockKeyhole className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-dark-500" /><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter admin password" className="w-full pl-11 pr-4 py-3 rounded-xl bg-dark-800/70 border border-dark-700 text-white outline-none focus:border-primary-500/60" autoComplete="current-password" /></div></label>
-          {error && <p className="text-accent-rose text-sm mb-4">{error}</p>}
-          <button type="submit" className="w-full btn-primary py-3 flex items-center justify-center gap-2">Enter control panel <ArrowRight className="w-4 h-4" /></button>
-          <p className="text-dark-600 text-xs mt-5 text-center">Frontend-only admin guard. Use protected server authorization before handling real user data.</p>
-        </form>
+        <div className="reg-row">
+          <span>NSE · Member</span>
+          <span>BSE · Member</span>
+          <span>AMFI Registered MFD</span>
+        </div>
+      </div>
+
+      <div className="auth-r">
+        {onToggleTheme && (
+          <button type="button" className="theme-fab icon-btn" onClick={onToggleTheme} aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
+            {theme === 'dark' ? <SunMedium className="h-4 w-4" /> : <MoonStar className="h-4 w-4" />}
+          </button>
+        )}
+
+        <div className="auth-card">
+          <div className="join-card" style={{ padding: '26px 28px', borderRadius: '22px' }}>
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-[var(--admin-gold)]">Secure workspace</p>
+            <h2 style={{ marginTop: '10px' }}>Sign in</h2>
+            <p className="mt-2 text-sm text-[var(--admin-muted)]">Sign in with the admin credentials configured for this server.</p>
+
+            <form onSubmit={submit} className="fgrid" style={{ marginTop: '22px' }}>
+              <label className="fld wide">
+                <span>Email</span>
+                <input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="admin@dhanvo.in" autoComplete="username" />
+              </label>
+
+              <label className="fld wide">
+                <span>Password</span>
+                <div style={{ position: 'relative' }}>
+                  <LockKeyhole className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--admin-muted)]" style={{ position: 'absolute', left: 14, top: '50%' }} />
+                  <input type="password" required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Admin password" autoComplete="current-password" style={{ paddingLeft: 40 }} />
+                </div>
+              </label>
+
+              {(error || notice) && <p role="alert" className="fld wide" style={{ color: '#B4442F', fontWeight: 700 }}>{error || notice}</p>}
+
+              <button type="submit" disabled={submitting} className="btn primary block wide" style={{ width: '100%', marginTop: '6px' }}>
+                {submitting ? 'Verifying…' : 'Sign in'}
+                {!submitting && <ArrowRight className="h-4 w-4" />}
+              </button>
+            </form>
+
+            <p className="mt-4 text-xs leading-relaxed text-[var(--admin-muted)]">
+              Access is verified by the admin authentication service. Dashboard data is loaded from the protected backend.
+            </p>
+          </div>
+        </div>
       </div>
     </main>
   );

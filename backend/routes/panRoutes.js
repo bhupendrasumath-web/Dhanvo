@@ -1,9 +1,8 @@
 import express from 'express';
-import crypto from 'crypto';
-import bcrypt from 'bcryptjs';
 import { pool } from '../config/db.js';
 import User from '../models/User.js';
 import { generateToken, protect } from '../middleware/auth.js';
+import { encryptedPassword, getNseConfig, requiredEnv } from '../utils/nseAuth.js';
 
 const router = express.Router();
 const PAN_PATTERN = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
@@ -70,6 +69,7 @@ async function generateUniqueNseClientCode(pan) {
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS nse_client_code VARCHAR(10)');
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS nse_ucc_registered BOOLEAN DEFAULT FALSE');
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS nse_ucc_registered_at TIMESTAMP');
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS login_credential_type VARCHAR(10) NOT NULL DEFAULT 'password'");
   await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS users_nse_client_code_unique ON users(nse_client_code) WHERE nse_client_code IS NOT NULL');
 
   const candidate = generateNseClientCode(pan);
@@ -235,11 +235,77 @@ function formatNseReportDate(value) {
 }
 
 function normalizeUccStatus(value, remediation = '') {
-  const status = String(value || '').trim().toUpperCase();
+  const status = String(value || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
   if (status === 'ACTIVE') return 'ACTIVE';
   if (status === 'INACTIVE') return String(remediation || '').trim() ? 'ACTION_REQUIRED' : 'FAILED';
   if (['FAILED', 'REJECTED'].includes(status)) return 'FAILED';
-  return 'PENDING';
+  if (['ACTION_REQUIRED', 'REVIEW'].includes(status)) return 'ACTION_REQUIRED';
+  if ([
+    'PENDING',
+    'OPEN',
+    'SUBMITTED',
+    'NOT_REGISTERED',
+    'NOT_STARTED',
+    'IN_PROCESS',
+    'IN_PROGRESS',
+    'UNDER_PROCESS',
+  ].includes(status)) return 'PENDING';
+  return null;
+}
+
+function normalizeNseIdentifier(value) {
+  return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function getNseReportField(record, aliases) {
+  if (!record || typeof record !== 'object') return '';
+  const normalizedAliases = new Set(aliases.map((alias) => alias.toLowerCase().replace(/[^a-z0-9]/g, '')));
+  const field = Object.keys(record).find((key) => normalizedAliases.has(key.toLowerCase().replace(/[^a-z0-9]/g, '')));
+  return field ? String(record[field] || '').trim() : '';
+}
+
+function findNseClientReport(rows, clientCode, pan) {
+  const expectedCode = normalizeNseIdentifier(clientCode);
+  const expectedPan = normalizeNseIdentifier(pan);
+  const reportCode = (row) => getNseReportField(row, ['client_code', 'clientCode', 'ucc', 'ucc_code']);
+  const reportPan = (row) => getNseReportField(row, [
+    'primary_holder_pan',
+    'primaryHolderPan',
+    'pan',
+    'pan_number',
+    'pan_no',
+  ]);
+
+  const matchingCode = expectedCode
+    ? rows.filter((row) => normalizeNseIdentifier(reportCode(row)) === expectedCode)
+    : [];
+  if (expectedPan) {
+    const codeAndPanMatch = matchingCode.find(
+      (row) => normalizeNseIdentifier(reportPan(row)) === expectedPan
+    );
+    if (codeAndPanMatch) return codeAndPanMatch;
+  } else if (matchingCode.length === 1) {
+    return matchingCode[0];
+  }
+
+  const codeWithoutPan = matchingCode.filter((row) => !reportPan(row));
+  if (matchingCode.length === 1 && codeWithoutPan.length === 1) return codeWithoutPan[0];
+
+  const matchingPan = expectedPan
+    ? rows.filter((row) => normalizeNseIdentifier(reportPan(row)) === expectedPan)
+    : [];
+  if (matchingPan.length === 1) return matchingPan[0];
+
+  if (rows.length === 1) {
+    const onlyRow = rows[0];
+    const returnedCode = normalizeNseIdentifier(reportCode(onlyRow));
+    const returnedPan = normalizeNseIdentifier(reportPan(onlyRow));
+    if ((!returnedCode || returnedCode === expectedCode) && (!returnedPan || returnedPan === expectedPan)) {
+      return onlyRow;
+    }
+  }
+
+  return null;
 }
 
 async function ensurePanKycTable() {
@@ -377,16 +443,39 @@ async function ensureOnboardingUser(application) {
   const email = String(identity.email || '').trim().toLowerCase();
   const phone = String(identity.phone || '').trim();
   const names = splitName(client.full_name);
-  let user = await User.findOne({ $or: [{ email }, { phone }] });
+  const user = await User.findOne({ $or: [{ email }, { phone }] });
 
   if (user) return user;
 
-  const password = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 10);
+  const signupCredential = (await pool.query(
+    `SELECT login_secret_hash, login_secret_type
+     FROM signup_otps
+     WHERE email = $1
+       AND phone = $2
+       AND verified_at IS NOT NULL
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [email, phone]
+  )).rows[0];
+  if (!signupCredential) {
+    const error = new Error('Verify your signup OTP and set a password or PIN before continuing');
+    error.code = 'SIGNUP_CREDENTIAL_REQUIRED';
+    throw error;
+  }
+
   const result = await pool.query(
-    `INSERT INTO users (first_name, last_name, email, phone, password, pan, is_verified, account_opening_status)
-     VALUES ($1, $2, $3, $4, $5, $6, TRUE, 'PENDING')
+    `INSERT INTO users (first_name, last_name, email, phone, password, login_credential_type, pan, is_verified, account_opening_status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, 'PENDING')
      RETURNING *`,
-    [names.firstName || 'Applicant', names.lastName || 'User', email, phone, password, String(client.pan || '').trim().toUpperCase()]
+    [
+      names.firstName || 'Applicant',
+      names.lastName || 'User',
+      email,
+      phone,
+      signupCredential.login_secret_hash,
+      signupCredential.login_secret_type,
+      String(client.pan || '').trim().toUpperCase(),
+    ]
   );
 
   return User.findById(result.rows[0].id);
@@ -489,75 +578,6 @@ async function uploadNseElog(application, clientCode, requestIp) {
   return response;
 }
 
-function getNseConfig() {
-  const baseUrl = (process.env.NSE_BASE_URL || process.env.NSE_API_BASE_URL || 'https://www.nseinvest.com').replace(/\/+$/, '');
-  const loginUser = (process.env.NSE_LOGIN_USER_ID || process.env.NSE_USER_ID || '').trim();
-  const apiSecret = (process.env.NSE_API_SECRET_USER || process.env.NSE_API_SECRET || '').trim();
-  const memberLicenseKey = (process.env.NSE_MEMBER_LICENSE_KEY || process.env.NSE_API_KEY_MEMBER || '').trim();
-  const memberCode = String(process.env.NSE_MEMBER_CODE || '').trim();
-  const memberId = String(process.env.NSE_MEMBER_ID || memberCode || '').trim();
-
-  return {
-    baseUrl,
-    loginUser,
-    apiSecret,
-    memberLicenseKey,
-    memberId,
-    memberCode,
-  };
-}
-
-function requiredEnv() {
-  const cfg = getNseConfig();
-  const missing = [
-    ['baseUrl', cfg.baseUrl],
-    ['loginUser', cfg.loginUser],
-    ['apiSecret', cfg.apiSecret],
-    ['memberLicenseKey', cfg.memberLicenseKey],
-    ['memberId', cfg.memberId],
-  ].filter(([, value]) => !value);
-
-  if (missing.length) {
-    const missingKeys = missing.map(([key]) => key).join(', ');
-    throw new Error(`NSE_NOT_CONFIGURED: Missing ${missingKeys}`);
-  }
-
-  if (!/^\d+$/.test(String(cfg.memberId))) {
-    throw new Error('NSE_NOT_CONFIGURED: Invalid NSE member ID');
-  }
-}
-
-function encryptedPassword() {
-  requiredEnv();
-  const cfg = getNseConfig();
-
-  const randomNumber = Math.floor((Math.random() * 10000000000) + 1);
-  const plainText = `${cfg.apiSecret}|${randomNumber}`;
-  const iv = crypto.randomBytes(16).toString('hex');
-  const salt = crypto.randomBytes(16).toString('hex');
-
-  const key = crypto.pbkdf2Sync(
-    cfg.memberLicenseKey,
-    Buffer.from(salt, 'hex'),
-    1000,
-    16,
-    'sha1'
-  );
-
-  const cipher = crypto.createCipheriv(
-    'aes-128-cbc',
-    key,
-    Buffer.from(iv, 'hex')
-  );
-
-  const encrypted = Buffer.concat([
-    cipher.update(plainText, 'utf8'),
-    cipher.final(),
-  ]).toString('base64');
-
-  return Buffer.from(`${iv}::${salt}::${encrypted}`, 'utf8').toString('base64');
-}
-
 function normalizeResponse(response, requestedPan) {
   const row =
     Array.isArray(response?.report_data)
@@ -596,7 +616,7 @@ function normalizeResponse(response, requestedPan) {
   ).trim();
 
   const serviceUnreachable = /SERVICE\s+NOT\s+REACHABLE/i.test(remark);
-  const verified = status === 'S' && /KYC\s+(REGISTERED|VALIDATED)/i.test(remark);
+  const verified = status === 'S' && /^KYC\s+(REGISTERED|VALIDATED)\b/i.test(remark);
 
   let kycStatus = 'Not Verified';
 
@@ -682,7 +702,7 @@ function normalizeNseFinalKycStatus(payload, requestedPan) {
     ''
   ).trim();
 
-  const verified = ['S', 'SUCCESS', 'VERIFIED', 'Y'].includes(status) || /verified|registered|compliant/i.test(remark);
+  const verified = status === 'S' && /^KYC\s+(?:REGISTERED|VALIDATED)\b/i.test(remark);
   let kycStatus = 'Not Verified';
 
   if (verified) {
@@ -709,6 +729,20 @@ function normalizeNseFinalKycStatus(payload, requestedPan) {
   };
 }
 
+async function checkNseKycStatus(pan, clientCode = '') {
+  const response = await callNseRegistration(
+    '/nsemfdesk/api/v2/reports/CLIENT_KYC_REPORT',
+    {
+      pan,
+      pan_no: pan,
+      client_code: clientCode,
+      clientCode,
+    },
+    'Dhanvo-NSE-KYC-Report/1.0'
+  );
+  return normalizeNseFinalKycStatus(response, pan);
+}
+
 router.post('/init-ekyc', async (req, res) => {
   try {
     const pan = String(req.body?.pan || '').trim().toUpperCase();
@@ -727,12 +761,7 @@ router.post('/init-ekyc', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Investor email is required to start Aadhaar eKYC' });
     }
 
-    const kycReport = await callNseRegistration(
-      '/nsemfdesk/api/v2/reports/CLIENT_KYC_REPORT',
-      { pan_no: pan },
-      'Dhanvo-NSE-KYC-Report/1.0'
-    );
-    const existingKyc = normalizeNseFinalKycStatus(kycReport, pan);
+    const existingKyc = await checkNseKycStatus(pan);
     if (existingKyc.verified) {
       return res.json({
         success: true,
@@ -821,8 +850,7 @@ router.post('/check-kyc-status', async (req, res) => {
       clientCode,
     };
 
-    const response = await callNseRegistration('/nsemfdesk/api/v2/reports/CLIENT_KYC_REPORT', body, 'Dhanvo-NSE-KYC-Report/1.0');
-    const normalized = normalizeNseFinalKycStatus(response, pan);
+    const normalized = await checkNseKycStatus(pan, clientCode);
 
     return res.json({
       success: true,
@@ -985,6 +1013,24 @@ router.post('/register-nse-ucc', async (req, res) => {
       });
     }
 
+    const pan = String(payload.pan || user.pan || '').trim().toUpperCase();
+    if (!PAN_PATTERN.test(pan)) {
+      return res.status(400).json({ success: false, message: 'A valid PAN is required for NSE KYC verification' });
+    }
+
+    const nseKyc = await checkNseKycStatus(pan);
+    if (!nseKyc.verified) {
+      return res.status(409).json({
+        success: false,
+        code: 'KYC_NOT_VERIFIED',
+        message: 'NSE has not confirmed successful KYC for this PAN. UCC registration was not submitted.',
+        data: {
+          kycStatus: nseKyc.kycStatus,
+          statusRemark: nseKyc.statusRemark,
+        },
+      });
+    }
+
     const clientCode = existing.clientCode || (await ensureUserNseClientCode(user));
     const { firstName, middleName, lastName } = splitName(
       String(payload.firstName || payload.fullName || '').trim() ||
@@ -1001,7 +1047,7 @@ router.post('/register-nse-ucc', async (req, res) => {
       primary_holder_dob: normalizeNseDate(payload.dob || payload.dateOfBirth || ''),
       occupation_code: String(payload.occupationCode || '01').trim(),
       holding_nature: String(payload.holdingNature || 'SI').trim().toUpperCase(),
-      primary_holder_pan: String(payload.pan || user.pan || '').trim().toUpperCase(),
+      primary_holder_pan: pan,
       primary_holder_mobile: String(payload.mobile || phone || user.phone || '').trim(),
       primary_holder_email: String(payload.email || user.email || '').trim().toLowerCase(),
       address_1: String(payload.address1 || payload.address_1 || '').trim(),
@@ -1051,6 +1097,11 @@ router.post('/complete-account-opening', async (req, res) => {
     return res.status(400).json({ success: false, message: 'Required account opening details are missing' });
   }
 
+  const pan = String(client.pan).trim().toUpperCase();
+  if (!PAN_PATTERN.test(pan)) {
+    return res.status(400).json({ success: false, message: 'A valid PAN is required for NSE KYC verification' });
+  }
+
   if (identity.otp_verified !== true || application.kyc_verified !== true) {
     return res.status(400).json({ success: false, message: 'OTP and KYC verification are required before account opening' });
   }
@@ -1085,6 +1136,32 @@ router.post('/complete-account-opening', async (req, res) => {
       console.error('Nominee OTP verification lookup error:', error.message);
       return res.status(503).json({ success: false, message: 'Unable to confirm nominee email verification' });
     }
+  }
+
+  try {
+    const nseKyc = await checkNseKycStatus(pan);
+    if (!nseKyc.verified) {
+      return res.status(409).json({
+        success: false,
+        code: 'KYC_NOT_VERIFIED',
+        message: 'NSE has not confirmed successful KYC for this PAN. Complete Aadhaar eKYC and wait for NSE confirmation before continuing.',
+        data: {
+          kycStatus: nseKyc.kycStatus,
+          statusRemark: nseKyc.statusRemark,
+        },
+      });
+    }
+  } catch (error) {
+    console.error('NSE KYC verification before account opening failed:', error.message);
+    const status = error.statusCode === 401 || error.statusCode === 403
+      ? error.statusCode
+      : error.message === 'NSE_NOT_CONFIGURED' ? 503 : 502;
+    return res.status(status).json({
+      success: false,
+      message: status === 503
+        ? 'NSE KYC status service is not configured'
+        : 'Unable to confirm KYC with NSE. Account opening was not submitted.',
+    });
   }
 
   let user;
@@ -1213,7 +1290,9 @@ router.post('/complete-account-opening', async (req, res) => {
     });
   } catch (error) {
     console.error('Account opening completion error:', error.message);
-    const status = error.statusCode === 401 || error.statusCode === 403
+    const status = error.code === 'SIGNUP_CREDENTIAL_REQUIRED'
+      ? 400
+      : error.statusCode === 401 || error.statusCode === 403
       ? error.statusCode
       : error.message === 'NSE_NOT_CONFIGURED' ? 503 : 502;
 
@@ -1363,64 +1442,267 @@ router.post('/submit-fatca', protect, async (req, res) => {
   }
 });
 
-router.get('/account-opening-status', protect, async (req, res) => {
+router.post('/client-authorization-link', protect, async (req, res) => {
   try {
-    await ensureAccountOpeningColumns();
     const result = await pool.query(
-      `SELECT account_opening_status, nse_status, nse_status_remark,
-              nse_status_checked_at, nse_client_code, nse_ucc_registered,
-              nse_ucc_registered_at, nse_reg_id, nse_status_details,
-              fatca_status, fatca_remark, fatca_prefill_details
+      `SELECT nse_client_code, nse_ucc_registered
        FROM users WHERE id = $1 LIMIT 1`,
       [req.user._id]
     );
-    const row = result.rows[0];
+    const user = result.rows[0];
+    const clientCode = String(user?.nse_client_code || '').trim();
+
+    if (!user || !clientCode || !user.nse_ucc_registered) {
+      return res.status(409).json({
+        success: false,
+        message: 'Your NSE UCC is not registered yet, so an authorization link is not available.',
+      });
+    }
+
+    const linkResponse = await callNseRegistration(
+      '/nsemfdesk/api/v2/reports/GET_LINK',
+      { productType: 'CL_ACT', productRefId: clientCode },
+      'Dhanvo-NSE-Client-Authorization/1.0'
+    );
+    const errorMessage = String(linkResponse.errorMessage || linkResponse.error_remark || '').trim();
+    if (String(linkResponse.response_status || '').trim().toUpperCase() === 'F' || errorMessage) {
+      return res.status(502).json({
+        success: false,
+        message: errorMessage || 'NSE could not generate the client authorization link. Please contact support.',
+      });
+    }
+
+    const authorizationUrl = String(linkResponse.firstHolderLink || '').trim();
+    if (!authorizationUrl) {
+      return res.status(404).json({
+        success: false,
+        message: 'NSE did not return an authorization link. Check your registered email or contact Dhanvo support.',
+      });
+    }
+
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(authorizationUrl);
+    } catch {
+      return res.status(502).json({
+        success: false,
+        message: 'NSE returned an invalid authorization link. Please contact support.',
+      });
+    }
+    if (
+      parsedUrl.protocol !== 'https:'
+      || !/(^|\.)nseindia\.com$/i.test(parsedUrl.hostname)
+      && !/(^|\.)nseinvest\.com$/i.test(parsedUrl.hostname)
+    ) {
+      return res.status(502).json({
+        success: false,
+        message: 'NSE returned an untrusted authorization link. Please contact support.',
+      });
+    }
+
+    return res.json({ success: true, data: { authorizationUrl } });
+  } catch (error) {
+    console.error('NSE client authorization link error:', error.message);
+    const status = error.statusCode === 401 || error.statusCode === 403
+      ? error.statusCode
+      : error.message === 'NSE_NOT_CONFIGURED' ? 503 : 502;
+    return res.status(status).json({
+      success: false,
+      message: status === 503
+        ? 'NSE authorization service is not configured. Please contact support.'
+        : 'Unable to retrieve your NSE authorization link. Please try again or contact support.',
+    });
+  }
+});
+
+async function getAndStoreNseAccountStatus(userId) {
+  await ensureAccountOpeningColumns();
+  const result = await pool.query(
+      `SELECT account_opening_status, nse_status, nse_status_remark, pan,
+              nse_status_checked_at, nse_client_code, nse_ucc_registered,
+              nse_ucc_registered_at, nse_reg_id, nse_status_details,
+              fatca_status, fatca_remark, fatca_prefill_details, created_at
+       FROM users WHERE id = $1 LIMIT 1`,
+    [userId]
+  );
+  const row = result.rows[0];
+  if (!row) return { row: null };
+
+  const statusCheckErrors = [];
+  let report = null;
+  let authorizationReport = null;
+  let clientDetailResponse = null;
+  let authorizationResponse = null;
+  let reportRowsCount = 0;
+  let reportQuerySucceeded = false;
+  const clientCode = String(row.nse_client_code || '').trim();
+
+  if (clientCode) {
+    try {
+      clientDetailResponse = await callNseRegistration(
+        '/nsemfdesk/api/v2/reports/CLIENT_DETAIL_REPORT',
+        {
+          from_date: formatNseReportDate(row.nse_ucc_registered_at || row.created_at),
+          to_date: formatNseReportDate(),
+          client_code: clientCode,
+        },
+        'Dhanvo-NSE-Client-Report/1.0'
+      );
+      reportQuerySucceeded = true;
+      const reportRows = Array.isArray(clientDetailResponse?.report_data)
+        ? clientDetailResponse.report_data
+        : [];
+      reportRowsCount = reportRows.length;
+      report = findNseClientReport(reportRows, clientCode, row.pan);
+      if (!report) {
+        statusCheckErrors.push(
+          reportRows.length
+            ? 'NSE returned report rows, but none could be safely matched by client code or PAN'
+            : 'NSE client detail report returned no client records'
+        );
+      }
+    } catch (error) {
+      statusCheckErrors.push(error.message || 'NSE client detail report unavailable');
+    }
+
+    try {
+      authorizationResponse = await callNseRegistration(
+        '/nsemfdesk/api/v2/reports/client_authorization',
+        {
+          from_date: formatNseReportDate(row.nse_ucc_registered_at || row.created_at),
+          to_date: formatNseReportDate(),
+          client_code: clientCode,
+        },
+        'Dhanvo-NSE-Client-Authorization/1.0'
+      );
+      const authorizationRows = Array.isArray(authorizationResponse?.report_data)
+        ? authorizationResponse.report_data
+        : [];
+      authorizationReport = findNseClientReport(authorizationRows, clientCode, row.pan);
+    } catch (error) {
+      statusCheckErrors.push(error.message || 'NSE client authorization report unavailable');
+    }
+  } else {
+    statusCheckErrors.push('NSE client code is unavailable for this account');
+  }
+
+  const reportDetails = report ? {
+    authStatus: getNseReportField(authorizationReport, ['auth_status', 'authorization_status']) || null,
+    uccStatus: getNseReportField(report, ['ucc_status']) || null,
+    uccRemediation: getNseReportField(report, ['ucc_remediation']) || null,
+    primaryHolderKycStatus: getNseReportField(report, ['primary_holder_kyc_status']) || null,
+    primaryHolderKycRemarks: getNseReportField(report, ['primary_holder_kyc_status_remarks', 'primary_holder_kyc_remarks']) || null,
+    dematStatus: getNseReportField(report, ['demat_status']) || null,
+    bank1Status: getNseReportField(report, ['bank1_status']) || null,
+    bank1RejectionRemarks: getNseReportField(report, ['bank1_rejection_remarks']) || null,
+  } : row.nse_status_details ? {
+    ...row.nse_status_details,
+    authStatus: authorizationReport?.auth_status || null,
+  } : authorizationReport ? {
+    authStatus: authorizationReport.auth_status || null,
+  } : null;
+
+  const rawUccStatus = getNseReportField(report, ['ucc_status']);
+  const uccRemediation = getNseReportField(report, ['ucc_remediation']);
+  const nseStatus = report
+    ? normalizeUccStatus(rawUccStatus, uccRemediation)
+    : String(row.nse_status || 'PENDING').trim().toUpperCase();
+  const isUccRegistered = String(rawUccStatus).trim().toUpperCase() === 'ACTIVE';
+  const nseStatusRemark = report
+    ? uccRemediation
+      || getNseReportField(report, ['primary_holder_kyc_status_remarks', 'primary_holder_kyc_remarks'])
+      || rawUccStatus
+      || 'NSE report received'
+    : row.nse_status_remark || 'Awaiting NSE validation';
+  const accountOpeningStatus = nseStatus === 'ACTIVE'
+    ? 'COMPLETED'
+    : nseStatus === 'FAILED' ? 'FAILED' : nseStatus === 'ACTION_REQUIRED' ? 'ACTION_REQUIRED' : 'PENDING';
+  let statusResultChanged = false;
+  let checkedAt = row.nse_status_checked_at;
+  if (report && nseStatus) {
+    const updateResult = await pool.query(
+      `UPDATE users
+       SET account_opening_status = $1,
+           nse_status = $2,
+           nse_status_remark = $3,
+           nse_status_checked_at = NOW(),
+           nse_status_details = $4::jsonb,
+           nse_ucc_registered = $5,
+           nse_ucc_registered_at = CASE
+             WHEN $5 THEN COALESCE(nse_ucc_registered_at, NOW())
+             ELSE NULL
+           END
+       WHERE id = $6
+         AND (
+           account_opening_status IS DISTINCT FROM $1
+           OR nse_status IS DISTINCT FROM $2
+           OR nse_status_remark IS DISTINCT FROM $3
+           OR nse_status_details IS DISTINCT FROM $4::jsonb
+           OR nse_ucc_registered IS DISTINCT FROM $5
+           OR ($5 AND nse_ucc_registered_at IS NULL)
+         )
+       RETURNING nse_status_checked_at`,
+      [
+        accountOpeningStatus,
+        nseStatus,
+        nseStatusRemark,
+        JSON.stringify(reportDetails || {}),
+        isUccRegistered,
+        userId,
+      ]
+    );
+    statusResultChanged = updateResult.rowCount > 0;
+    if (statusResultChanged) checkedAt = updateResult.rows[0].nse_status_checked_at;
+  } else if (report) {
+    statusCheckErrors.push('NSE report did not include a recognized UCC status; stored account status was left unchanged');
+  }
+
+  return {
+    row,
+    report,
+    clientDetailResponse,
+    authorizationResponse,
+    statusCheckErrors,
+    reportDetails,
+    nseStatus,
+    nseStatusRemark,
+    accountOpeningStatus,
+    isUccRegistered,
+    nseStatusCheckedAt: checkedAt,
+    checked: Boolean(report && nseStatus),
+    changed: statusResultChanged,
+    reportRowsCount,
+    reportQuerySucceeded,
+    clientCodePresent: Boolean(clientCode),
+  };
+}
+
+export async function refreshNseAccountStatus(userId) {
+  return getAndStoreNseAccountStatus(userId);
+}
+
+router.get('/account-opening-status', protect, async (req, res) => {
+  try {
+    const statusResult = await getAndStoreNseAccountStatus(req.user._id);
+    const {
+      row,
+      report,
+      clientDetailResponse,
+      authorizationResponse,
+      statusCheckErrors,
+      reportDetails,
+      nseStatus,
+      nseStatusRemark,
+      accountOpeningStatus,
+      isUccRegistered,
+      nseStatusCheckedAt,
+    } = statusResult;
 
     if (!row) {
       return res.status(404).json({ success: false, message: 'Account not found' });
     }
 
-    let report = null;
-    let authorizationReport = null;
-    const statusCheckErrors = [];
     const clientCode = String(row.nse_client_code || '').trim();
-
-    if (clientCode) {
-      try {
-        const reportResponse = await callNseRegistration(
-          '/nsemfdesk/api/v2/reports/CLIENT_DETAIL_REPORT',
-          {
-            from_date: formatNseReportDate(row.nse_ucc_registered_at),
-            to_date: formatNseReportDate(),
-            client_code: clientCode,
-          },
-          'Dhanvo-NSE-Client-Report/1.0'
-        );
-        report = Array.isArray(reportResponse?.report_data)
-          ? reportResponse.report_data.find((item) => String(item?.client_code || '').trim() === clientCode) || reportResponse.report_data[0] || null
-          : null;
-        if (!report) statusCheckErrors.push('NSE client detail report returned no client record');
-      } catch (error) {
-        statusCheckErrors.push(error.message || 'NSE client detail report unavailable');
-      }
-
-      try {
-        const authorizationResponse = await callNseRegistration(
-          '/nsemfdesk/api/v2/reports/client_authorization',
-          {
-            from_date: formatNseReportDate(row.nse_ucc_registered_at),
-            to_date: formatNseReportDate(),
-            client_code: clientCode,
-          },
-          'Dhanvo-NSE-Client-Authorization/1.0'
-        );
-        authorizationReport = Array.isArray(authorizationResponse?.report_data)
-          ? authorizationResponse.report_data.find((item) => String(item?.client_code || '').trim() === clientCode) || null
-          : null;
-      } catch (error) {
-        statusCheckErrors.push(error.message || 'NSE client authorization report unavailable');
-      }
-    }
 
     const fatcaPrefill = { ...(row.fatca_prefill_details || {}) };
     if (!fatcaPrefill.dateOfBirth) {
@@ -1449,57 +1731,29 @@ router.get('/account-opening-status', protect, async (req, res) => {
       );
     }
 
-    const reportDetails = report ? {
-      authStatus: authorizationReport?.auth_status || null,
-      uccStatus: report.ucc_status || null,
-      uccRemediation: report.ucc_remediation || null,
-      primaryHolderKycStatus: report.primary_holder_kyc_status || null,
-      primaryHolderKycRemarks: report.primary_holder_kyc_status_remarks || null,
-      dematStatus: report.demat_status || null,
-      bank1Status: report.bank1_status || null,
-      bank1RejectionRemarks: report.bank1_rejection_remarks || null,
-    } : row.nse_status_details ? {
-      ...row.nse_status_details,
-      authStatus: authorizationReport?.auth_status || null,
-    } : authorizationReport ? {
-      authStatus: authorizationReport.auth_status || null,
-    } : null;
-
-    const nseStatus = report
-      ? normalizeUccStatus(report.ucc_status, report.ucc_remediation)
-      : String(row.nse_status || 'PENDING').trim().toUpperCase();
-    const nseStatusRemark = report
-      ? String(report.ucc_remediation || report.primary_holder_kyc_status_remarks || report.ucc_status || 'NSE report received').trim()
-      : row.nse_status_remark || 'Awaiting NSE validation';
-    const accountOpeningStatus = nseStatus === 'ACTIVE'
-      ? 'COMPLETED'
-      : nseStatus === 'FAILED' ? 'FAILED' : nseStatus === 'ACTION_REQUIRED' ? 'ACTION_REQUIRED' : 'PENDING';
-
-    if (report || row.account_opening_status !== accountOpeningStatus) {
-      await pool.query(
-        `UPDATE users
-         SET account_opening_status = $1,
-             nse_status = $2,
-             nse_status_remark = $3,
-             nse_status_checked_at = CASE WHEN $4 THEN NOW() ELSE nse_status_checked_at END,
-             nse_status_details = CASE WHEN $4 THEN $5::jsonb ELSE nse_status_details END
-         WHERE id = $6`,
-        [accountOpeningStatus, nseStatus, nseStatusRemark, Boolean(report), JSON.stringify(reportDetails || {}), req.user._id]
-      );
-    }
-
     return res.json({
       success: true,
       data: {
         accountOpeningStatus,
         nseStatus,
         nseStatusRemark,
-        nseStatusCheckedAt: report ? new Date().toISOString() : row.nse_status_checked_at,
+        nseStatusCheckedAt,
         nseStatusCheckError: statusCheckErrors.join('; ') || null,
         nseStatusDetails: reportDetails,
+        nseResponse: {
+          clientDetailReport: clientDetailResponse,
+          authorizationReport: authorizationResponse,
+        },
+        pan: row.pan || null,
         nseClientCode: row.nse_client_code,
-        nseUccRegistered: Boolean(row.nse_ucc_registered),
-        nseUccRegisteredAt: row.nse_ucc_registered_at,
+        nseUccRegistered: report
+          ? isUccRegistered
+          : Boolean(row.nse_ucc_registered),
+        nseUccRegisteredAt: report
+          ? isUccRegistered
+            ? row.nse_ucc_registered_at || nseStatusCheckedAt
+            : null
+          : row.nse_ucc_registered_at,
         applicationId: row.nse_reg_id,
         fatcaStatus: row.fatca_status || 'NOT_SUBMITTED',
         fatcaRemark: row.fatca_remark || null,

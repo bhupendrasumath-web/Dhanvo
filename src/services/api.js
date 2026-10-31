@@ -14,6 +14,9 @@ const PUBLIC_AUTH_ENDPOINTS = [
   '/auth/check-kyc-status',
   '/auth/verify-bank',
   '/auth/login',
+  '/auth/send-login-otp',
+  '/auth/send-recovery-otp',
+  '/auth/reset-credential',
   '/auth/register',
   '/auth/forgot-password',
   '/auth/reset-password'

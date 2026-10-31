@@ -74,6 +74,7 @@ function mapRow(row) {
     email: row.email,
     phone: row.phone,
     password: row.password,
+    loginCredentialType: row.login_credential_type || 'password',
     pan: row.pan,
     nseClientCode: row.nse_client_code,
     nseUccRegistered: Boolean(row.nse_ucc_registered),
@@ -134,10 +135,19 @@ function mapRow(row) {
 }
 
 async function create(data) {
-  const { firstName, lastName, email, phone, password, pan = null } = data;
+  const {
+    firstName,
+    lastName,
+    email,
+    phone,
+    password,
+    pan = null,
+    loginCredentialType = 'password',
+  } = data;
   const hashedPassword = await bcrypt.hash(password, 10);
 
   await ensureNseClientCodeColumn();
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS login_credential_type VARCHAR(10) NOT NULL DEFAULT 'password'");
 
   const result = await pool.query(
     `INSERT INTO users (
@@ -146,13 +156,14 @@ async function create(data) {
        email,
        phone,
        password,
+       login_credential_type,
        pan,
        nse_client_code,
        nse_ucc_registered,
        nse_ucc_registered_at
-     ) VALUES ($1, $2, $3, $4, $5, $6, NULL, FALSE, NULL)
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, FALSE, NULL)
      RETURNING *`,
-    [firstName, lastName, email.toLowerCase(), phone, hashedPassword, pan]
+    [firstName, lastName, email.toLowerCase(), phone, hashedPassword, loginCredentialType, pan]
   );
 
   return mapRow(result.rows[0]);
@@ -161,8 +172,8 @@ async function create(data) {
 async function findOne(query = {}) {
   if (query.$or && Array.isArray(query.$or)) {
     for (const condition of query.$or) {
-      if (condition.email) return findOne({ email: condition.email });
-      if (condition.phone) return findOne({ phone: condition.phone });
+      const user = await findOne(condition);
+      if (user) return user;
     }
     return null;
   }

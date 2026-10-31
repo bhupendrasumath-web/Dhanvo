@@ -1,18 +1,46 @@
 import { Link, useNavigate } from 'react-router-dom';
-import { TrendingUp, Settings, LogOut, Home, LineChart, Briefcase, History, HelpCircle, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { TrendingUp, LogOut, Search, Bell, ShoppingCart, ChevronDown } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import toast from 'react-hot-toast';
 
 const menuItems = [
-  { id: 'overview', icon: Home, label: 'Overview' },
-  { id: 'portfolio', icon: Briefcase, label: 'Portfolio' },
-  { id: 'watchlist', icon: LineChart, label: 'Watchlist' },
-  { id: 'orders', icon: History, label: 'Orders' },
+  { id: 'overview', label: 'Mutual Funds' },
+  { id: 'unlisted', label: 'Unlisted Shares' },
+  { id: 'demat', label: 'Demat/Trading Account' },
 ];
 
-const Sidebar = ({ activeTab, setActiveTab, isOpen, onClose }) => {
+const moreItems = [
+  { id: 'insurance', label: 'Insurance' },
+  { id: 'calculators', label: 'Calculators' },
+  { id: 'planning', label: 'Financial Planning' },
+  { id: 'strategy', label: 'Strategy Builder' },
+];
+
+const Sidebar = ({ activeTab, setActiveTab }) => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [searchQuery, setSearchQuery] = useState('');
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef(null);
+  const isMoreActive = moreItems.some(({ id }) => id === activeTab);
+  const initials = `${user?.firstName?.[0] || ''}${user?.lastName?.[0] || ''}` || 'D';
+
+  useEffect(() => {
+    const closeOnOutsideClick = (event) => {
+      if (!moreRef.current?.contains(event.target)) setMoreOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setMoreOpen(false);
+    };
+
+    document.addEventListener('click', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('click', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, []);
 
   const handleLogout = () => {
     logout();
@@ -21,56 +49,93 @@ const Sidebar = ({ activeTab, setActiveTab, isOpen, onClose }) => {
   };
 
   return (
-    <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-dark-900/95 backdrop-blur-xl border-r border-dark-800 h-screen flex flex-col transition-transform duration-200 md:sticky md:top-0 md:translate-x-0 ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-      <div className="p-6 border-b border-dark-800">
-        <Link to="/" className="flex items-center space-x-3">
-          <div className="w-10 h-10 bg-gradient-to-br from-amber-500 via-yellow-500 to-amber-600 rounded-xl flex items-center justify-center shadow-lg shadow-amber-500/20">
-            <TrendingUp className="w-6 h-6 text-dark-950" />
-          </div>
-          <div className="flex flex-col">
-            <span className="text-xl font-display font-bold bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-500 bg-clip-text text-transparent">धनवो</span>
-            <span className="text-[9px] text-dark-400 -mt-1 tracking-wider">DHANVO</span>
-          </div>
-        </Link>
-        <button type="button" onClick={onClose} className="md:hidden absolute top-5 right-4 p-2 text-dark-400 hover:text-white" aria-label="Close navigation">
-          <X className="w-5 h-5" />
-        </button>
-      </div>
-
-      <nav className="flex-1 p-4">
-        <ul className="space-y-2">
-          {menuItems.map((item) => (
-            <li key={item.id}>
+    <>
+      <header className="dash-nav">
+        <div className="dash-nav-inner">
+          <Link to="/" className="dash-brand" aria-label="Dhanvo home">
+            <span className="dash-brand-mark"><TrendingUp size={21} strokeWidth={2.2} /></span>
+            <span className="dash-brand-copy"><strong>धनवो</strong><small>DHANVO</small></span>
+          </Link>
+          <nav className="dash-nav-links" aria-label="Dashboard navigation">
+            {menuItems.map(({ id, label }) => (
               <button
-                onClick={() => { setActiveTab(item.id); onClose?.(); }}
-                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all ${activeTab === item.id ? 'bg-primary-500/10 text-primary-400 border border-primary-500/20' : 'text-dark-400 hover:text-white hover:bg-dark-800/50'}`}
+                key={id}
+                type="button"
+                aria-current={activeTab === id ? 'page' : undefined}
+                onClick={() => {
+                  setActiveTab(id);
+                  setMoreOpen(false);
+                }}
+                className={`dash-nav-link${activeTab === id ? ' active' : ''}`}
               >
-                <item.icon className="w-5 h-5" />
-                <span className="font-medium">{item.label}</span>
+                <span>{label}</span>
+                {id === 'unlisted' && <span className="dash-ipo-tag">PRE-IPO</span>}
               </button>
-            </li>
-          ))}
-        </ul>
-
-        <div className="mt-8 pt-8 border-t border-dark-800">
-          <ul className="space-y-2">
-            <li><button className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-dark-400 hover:text-white hover:bg-dark-800/50 transition-all"><Settings className="w-5 h-5" /><span className="font-medium">Settings</span></button></li>
-            <li><button className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-dark-400 hover:text-white hover:bg-dark-800/50 transition-all"><HelpCircle className="w-5 h-5" /><span className="font-medium">Help & Support</span></button></li>
-          </ul>
-        </div>
-      </nav>
-
-      <div className="p-4 border-t border-dark-800">
-        <div className="flex items-center space-x-3 p-3 bg-dark-800/50 rounded-xl">
-          <div className="w-10 h-10 bg-gradient-to-br from-primary-500 to-accent-cyan rounded-full flex items-center justify-center text-dark-950 font-semibold">{user?.firstName?.[0]}{user?.lastName?.[0]}</div>
-          <div className="flex-1 min-w-0">
-            <p className="text-white font-medium truncate">{user?.firstName} {user?.lastName}</p>
-            <p className="text-dark-500 text-sm truncate">{user?.email}</p>
+            ))}
+            <div className="dash-more-wrap" ref={moreRef}>
+              <button
+                type="button"
+                className={`dash-nav-link${isMoreActive ? ' active' : ''}`}
+                aria-expanded={moreOpen}
+                aria-haspopup="menu"
+                aria-current={isMoreActive ? 'page' : undefined}
+                onClick={() => setMoreOpen((open) => !open)}
+              >
+                <span>More</span>
+                <ChevronDown size={13} className={moreOpen ? 'rotated' : ''} />
+              </button>
+              {moreOpen && (
+                <div className="dash-more-menu" role="menu" aria-label="More dashboard pages">
+                  {moreItems.map(({ id, label }) => (
+                    <button
+                      key={id}
+                      type="button"
+                      role="menuitem"
+                      className={activeTab === id ? 'active' : ''}
+                      aria-current={activeTab === id ? 'page' : undefined}
+                      onClick={() => {
+                        setActiveTab(id);
+                        setMoreOpen(false);
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </nav>
+          <label className="dash-nav-search">
+            <Search size={15} aria-hidden="true" />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search"
+              aria-label="Search investments"
+            />
+          </label>
+          <button type="button" className="dash-cart-button" disabled title="Cart is not available yet" aria-label="Cart">
+            <ShoppingCart size={15} />
+            <span>0</span>
+          </button>
+          <button type="button" className="dash-nav-notifications" aria-label="Notifications" title="Notifications">
+            <Bell size={17} />
+            <span />
+          </button>
+          <div className="dash-nav-account">
+            <div className="dash-avatar" aria-hidden="true">{initials}</div>
+            <div className="dash-account-copy">
+              <span>{[user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'Investor'}</span>
+              <small>{user?.email}</small>
+            </div>
+            <button type="button" className="dash-logout" onClick={handleLogout} aria-label="Log out" title="Log out">
+              <LogOut size={18} />
+            </button>
           </div>
-          <button onClick={handleLogout} className="p-2 text-dark-400 hover:text-accent-rose transition-colors" title="Logout"><LogOut className="w-5 h-5" /></button>
         </div>
-      </div>
-    </aside>
+      </header>
+    </>
   );
 };
 
